@@ -154,4 +154,8 @@ if(BROWNSWEEP_BUILD_TOOLS)
     add_executable(brownsweep_analysis Tools/SweepAnalysis.cpp)
     target_link_libraries(brownsweep_analysis PRIVATE brownsweep_dsp)
     target_compile_features(brownsweep_analysis PRIVATE cxx_std_17)
+
+    add_executable(brownsweep_demo Tools/RenderDemo.cpp)
+    target_link_libraries(brownsweep_demo PRIVATE brownsweep_dsp)
+    target_compile_features(brownsweep_demo PRIVATE cxx_std_17)
 endif()

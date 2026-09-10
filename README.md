@@ -707,6 +707,28 @@ cmake -S . -B build -DBROWNSWEEP_BUILD_GUI_SNAPSHOT=ON && cmake --build build
 ./build/brownsweep_snapshot_artefacts/Release/brownsweep_snapshot Docs/screenshot.png 900 78 34
 ```
 
+`brownsweep_demo` renders the audio examples - a band-limited stack of seven
+detuned saws at 110 Hz with the cutoff swept from 20 Hz to 14 kHz, through
+several settings, deliberately un-normalised because the level trajectory is the
+thing being demonstrated:
+
+```bash
+./build/brownsweep_demo audio/
+```
+
+It prints the per-second RMS of each render, and the contrast is the whole
+argument in one table. On that saw, energy above 4 kHz per second of the sweep,
+relative to the dry source:
+
+| | 1s | 2s | 3s | 4s | 5s | 6s | 7s | 8s | 9s | 10s |
+|---|---|---|---|---|---|---|---|---|---|---|
+| conventional HP | 0.0 | 0.0 | 0.0 | 0.0 | −0.0 | −0.0 | −0.0 | −0.0 | −0.1 | −3.4 |
+| BrownSweep | −0.6 | −0.6 | −0.6 | −1.3 | −4.4 | −8.4 | −12.3 | −15.4 | −17.6 | −23.2 |
+
+The conventional filter's top end does not move for nine seconds while its low
+end is being deleted underneath it. That is the sound of an HP sweep "getting
+brighter" — the treble is not rising, everything else is leaving.
+
 `brownsweep_analysis` is the measurement rig the design constants were tuned
 against:
 
@@ -803,6 +825,7 @@ Source/                     JUCE plugin wrapper
 
 Tests/                      60 tests, no external dependencies
 Tools/SweepAnalysis.cpp     the measurement rig
+Tools/RenderDemo.cpp        renders the audio examples
 Tools/GuiSnapshot.cpp       headless editor screenshot
 .github/workflows/build.yml CI: tests on three platforms, release binaries
 ```
