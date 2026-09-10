@@ -729,6 +729,21 @@ The conventional filter's top end does not move for nine seconds while its low
 end is being deleted underneath it. That is the sound of an HP sweep "getting
 brighter" — the treble is not rising, everything else is leaving.
 
+Run the same sweep backwards — high-pass closed, opening downward, i.e. the
+build into a drop — and the mirror image is if anything more telling:
+
+| | 1s | 2s | 3s | 4s | 5s | 6s | 7s | 8s | 9s | 10s |
+|---|---|---|---|---|---|---|---|---|---|---|
+| conventional HP | −10.3 | −8.9 | −1.6 | −0.0 | −0.0 | −0.0 | −0.0 | −0.0 | −0.0 | 0.0 |
+| BrownSweep | −28.2 | −27.3 | −20.9 | −17.0 | −13.7 | −9.5 | −4.8 | −1.3 | −0.6 | −0.6 |
+
+The conventional filter has delivered its entire top end by the fourth second of
+an eleven-second riser; everything after that is bass arriving underneath a
+treble that is already fully there. BrownSweep brings the top up on the same
+schedule as the bottom, so the sound swells as one object instead of assembling
+itself in layers. Overall level over the same riser: the conventional filter
+covers 30 dB, BrownSweep covers 48 dB.
+
 `brownsweep_analysis` is the measurement rig the design constants were tuned
 against:
 

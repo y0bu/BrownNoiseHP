@@ -163,14 +163,24 @@ struct Render
     const char* filename;
     const char* description;
     EngineParameters params;
+    bool reverse = false;      // true = closed -> open, the "drop" move
 };
 
-/** Cutoff automation: hold at the bottom, sweep up, hold at the top. */
-float cutoffAt (double t, double seconds)
+/** Cutoff automation.
+
+    Forward is the build: open at the bottom of the range, sweeping up until
+    almost nothing is left.  Reverse is the drop: the high-pass starts closed
+    near the top of its range and opens downward, with a longer tail at the end
+    so the full sound has time to land. */
+float cutoffAt (double t, double seconds, bool reverse)
 {
-    constexpr double holdLow = 1.5, holdHigh = 1.0;
-    const double sweepLength = seconds - holdLow - holdHigh;
-    const double u = clampValue ((t - holdLow) / sweepLength, 0.0, 1.0);
+    const double holdStart = reverse ? 1.0 : 1.5;
+    const double holdEnd   = reverse ? 2.5 : 1.0;
+    const double sweepLength = seconds - holdStart - holdEnd;
+
+    double u = clampValue ((t - holdStart) / sweepLength, 0.0, 1.0);
+    if (reverse) u = 1.0 - u;
+
     return positionToCutoff (static_cast<float> (u) * cutoffPosition (14000.0f));
 }
 
@@ -192,7 +202,7 @@ void render (const Render& r, const std::vector<std::vector<float>>& source,
     {
         const int n = std::min (kBlockSize, numFrames - pos);
 
-        params.cutoffHz = cutoffAt (static_cast<double> (pos) / kSampleRate, seconds);
+        params.cutoffHz = cutoffAt (static_cast<double> (pos) / kSampleRate, seconds, r.reverse);
         engine.setParameters (params);
 
         for (int ch = 0; ch < 2; ++ch) ptrs[static_cast<size_t> (ch)] = audio[static_cast<size_t> (ch)].data() + pos;
@@ -281,7 +291,30 @@ int main (int argc, char** argv)
         renders.push_back (r);
     }
 
-    std::printf ("Source: 7 detuned saws at 110 Hz, %.0f s, cutoff swept 20 Hz -> 14 kHz.\n"
+    // --- the same thing backwards: closed -> open, i.e. the drop ------------
+    {
+        Render r { "05-reverse-conventional-highpass.wav",
+                   "REVERSE: ordinary HP opening downward", baseParams(), true };
+        r.params.character = 0.0f;
+        r.params.analog    = 0.0f;
+        r.params.autoGain  = false;
+        r.params.filterMode = static_cast<int> (FilterMode::clean);
+        renders.push_back (r);
+    }
+    {
+        Render r { "06-reverse-brownsweep-ladder.wav",
+                   "REVERSE: BrownSweep LADDER opening downward", baseParams(), true };
+        renders.push_back (r);
+    }
+    {
+        Render r { "07-reverse-brownsweep-ladder-resonance.wav",
+                   "REVERSE: LADDER + RESONANCE 65% + ANALOG 65%", baseParams(), true };
+        r.params.resonance = 0.65f;
+        r.params.analog    = 0.65f;
+        renders.push_back (r);
+    }
+
+    std::printf ("Source: 7 detuned saws at 110 Hz, %.0f s, cutoff swept between 20 Hz and 14 kHz.\n"
                  "Nothing is normalised - the level differences are the point.\n"
                  "Figures are RMS in dBFS, one per second of the render.\n\n", seconds);
 
