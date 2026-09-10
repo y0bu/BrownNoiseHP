@@ -591,10 +591,43 @@ BS_TEST (ladderNeverBoostsWithoutResonance)
         }
 }
 
+BS_TEST (anUnusedLadderIsABitExactPassthrough)
+{
+    // Slopes up to 24 dB/oct leave the second ladder with passthrough taps and
+    // zero feedback.  It still runs - that is what keeps it warm and lets SLOPE
+    // changes cross-fade instead of clicking - so it has to be *exactly*
+    // transparent: u = (x - 0*acc) * 1.0, output = 1.0 * u.
+    //
+    // The behavioural proof is elsewhere: measuredResponseMatchesTheAnalyticModel
+    // runs the engine in LADDER mode at 24 dB/oct, where the engine runs two
+    // ladders and the analytic model only accounts for one.  It agrees to
+    // better than 0.6 dB, which it could not do if the second ladder coloured
+    // anything.
+    for (int slope = 0; slope <= 2; ++slope)          // 12, 18, 24 dB/oct
+    {
+        LadderCoefficients c;
+        c.update (700.0f, slope, 1.0f, 1.0f, 96000.0f, 1.0f);
+
+        CHECK (c.ladder[1].feedback == 0.0f);
+        CHECK (c.ladder[1].solveGain == 1.0f);
+        CHECK (c.ladder[1].taps[0] == 1.0f);
+        for (int t = 1; t < 5; ++t) CHECK (c.ladder[1].taps[t] == 0.0f);
+    }
+
+    // ...and for 36 and 48 dB/oct it is genuinely doing something.
+    for (int slope = 3; slope < kNumSlopes; ++slope)
+    {
+        LadderCoefficients c;
+        c.update (700.0f, slope, 1.0f, 1.0f, 96000.0f, 1.0f);
+        CHECK (c.ladder[1].feedback > 1.0f);
+        CHECK (c.ladder[1].taps[1] < -0.5f);
+    }
+}
+
 BS_TEST (ladderIsExactlyLinearWhenAnalogIsZero)
 {
     LadderCoefficients c;
-    c.update (800.0f, 2, 1.0f, 0.0f, 96000.0f);
+    c.update (800.0f, 2, 1.0f, 0.0f, 96000.0f, 1.0f);
     CHECK (c.feedbackShaper.linear);
 
     // With a linear shaper the feedback residual is identically zero, which is
@@ -628,7 +661,7 @@ BS_TEST (ladderFeedbackClipperGeneratesEvenHarmonics)
     const auto harmonics = [&] (float analog)
     {
         LadderCoefficients c;
-        c.update (cutoff, slope, 1.0f, analog, static_cast<float> (fs));
+        c.update (cutoff, slope, 1.0f, analog, static_cast<float> (fs), 1.0f);
 
         LadderState state;
         state.reset();
@@ -671,7 +704,7 @@ BS_TEST (ladderStaysStableWhenDrivenHard)
     for (int slope = 0; slope < kNumSlopes; ++slope)
     {
         LadderCoefficients c;
-        c.update (300.0f, slope, 1.0f, 1.0f, 96000.0f);
+        c.update (300.0f, slope, 1.0f, 1.0f, 96000.0f, 1.0f);
 
         LadderState state;
         state.reset();

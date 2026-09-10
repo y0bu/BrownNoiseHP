@@ -295,31 +295,44 @@ BS_TEST (parameterJumpsDoNotProduceDiscontinuities)
 
 BS_TEST (slopeChangesDoNotClick)
 {
-    auto p = defaultParams();
-    p.cutoffHz = 300.0f;
-    p.oversamplingFactor = 1;
-    auto enginePtr = makeEngine (p);
-    auto& engine = *enginePtr;
+    // Both topologies.  The ladder needed real work here: its pole placement
+    // moves by up to 1.1 octaves between 12 and 48 dB/oct and its tap
+    // coefficients change entirely, which without smoothing produced a step
+    // 2.7x larger than the signal's own maximum slew.
+    for (int mode = 0; mode < kNumFilterModes; ++mode)
+        for (float resonance : { 0.0f, 0.5f })
+        {
+            auto p = defaultParams();
+            p.cutoffHz   = 300.0f;
+            p.filterMode = mode;
+            p.resonance  = resonance;
+            p.oversamplingFactor = 1;
+            auto enginePtr = makeEngine (p);
+            auto& engine = *enginePtr;
 
-    const int n = 48000;
-    auto output = duplicate (sine (n, 500.0, kFs, 0.6f), 2);
-    std::vector<float*> ptrs (2);
+            const int n = 48000;
+            auto output = duplicate (sine (n, 500.0, kFs, 0.6f), 2);
+            std::vector<float*> ptrs (2);
 
-    const double inputMaxStep = 0.6 * 2.0 * kPi * 500.0 / kFs;
-    double worstStep = 0.0;
+            const double inputMaxStep = 0.6 * 2.0 * kPi * 500.0 / kFs;
+            double worstStep = 0.0;
 
-    for (int pos = 0; pos < n; pos += 64)
-    {
-        if (pos % 6400 == 0) { p.slopeIndex = (p.slopeIndex + 1) % kNumSlopes; engine.setParameters (p); }
-        for (int ch = 0; ch < 2; ++ch) ptrs[static_cast<size_t> (ch)] = output[static_cast<size_t> (ch)].data() + pos;
-        engine.process (ptrs.data(), 2, 64);
-    }
+            for (int pos = 0; pos < n; pos += 64)
+            {
+                if (pos % 6400 == 0) { p.slopeIndex = (p.slopeIndex + 1) % kNumSlopes; engine.setParameters (p); }
+                for (int ch = 0; ch < 2; ++ch) ptrs[static_cast<size_t> (ch)] = output[static_cast<size_t> (ch)].data() + pos;
+                engine.process (ptrs.data(), 2, 64);
+            }
 
-    for (size_t i = 1; i < output[0].size(); ++i)
-        worstStep = std::max (worstStep, std::fabs (static_cast<double> (output[0][i]) - output[0][i - 1]));
+            for (size_t i = 1; i < output[0].size(); ++i)
+                worstStep = std::max (worstStep, std::fabs (static_cast<double> (output[0][i]) - output[0][i - 1]));
 
-    CHECK (allFinite (output[0]));
-    CHECK_MSG (worstStep < inputMaxStep * 4.0, "worst step on slope change " + testing::describe (worstStep));
+            CHECK (allFinite (output[0]));
+            CHECK_MSG (worstStep < inputMaxStep * 1.5,
+                       "worst step on slope change " + testing::describe (worstStep)
+                       + " vs input step " + testing::describe (inputMaxStep)
+                       + " (mode " + testing::describe (mode) + ")");
+        }
 }
 
 BS_TEST (oversamplingChangesAreFadedNotSwitched)

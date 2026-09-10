@@ -69,22 +69,6 @@ struct SingleLadderCoefficients
     float feedback  = 0.0f;      // k
     float solveGain = 1.0f;      // 1 / (1 + k * G^4)
     float taps[5]   { 1.0f, 0.0f, 0.0f, 0.0f, 0.0f };
-    bool  active    = false;
-
-    void setTapOrder (int order) noexcept
-    {
-        static constexpr float kBinomial[5][5] =
-        {
-            {  1.0f,  0.0f,  0.0f,  0.0f, 0.0f },
-            {  1.0f, -1.0f,  0.0f,  0.0f, 0.0f },
-            {  1.0f, -2.0f,  1.0f,  0.0f, 0.0f },
-            {  1.0f, -3.0f,  3.0f, -1.0f, 0.0f },
-            {  1.0f, -4.0f,  6.0f, -4.0f, 1.0f }
-        };
-
-        const int n = clampValue (order, 0, 4);
-        for (int i = 0; i < 5; ++i) taps[i] = kBinomial[n][i];
-    }
 
     void setPole (float poleHz, float sampleRate) noexcept
     {
@@ -100,37 +84,77 @@ struct SingleLadderCoefficients
     }
 };
 
-/** Coefficients for the whole ladder stage (one or two cascaded ladders). */
+/** Binomial tap sets.  Order 0 - {1,0,0,0,0} with zero feedback - is an exact
+    algebraic passthrough: u = (x - 0) * 1.0 and the output is 1.0 * u.  That is
+    what lets the second ladder run permanently and be faded in and out rather
+    than switched, so changing SLOPE cannot click. */
+inline const float* ladderTaps (int order) noexcept
+{
+    static constexpr float kBinomial[5][5] =
+    {
+        {  1.0f,  0.0f,  0.0f,  0.0f, 0.0f },
+        {  1.0f, -1.0f,  0.0f,  0.0f, 0.0f },
+        {  1.0f, -2.0f,  1.0f,  0.0f, 0.0f },
+        {  1.0f, -3.0f,  3.0f, -1.0f, 0.0f },
+        {  1.0f, -4.0f,  6.0f, -4.0f, 1.0f }
+    };
+    return kBinomial[clampValue (order, 0, 4)];
+}
+
+/** Coefficients for the whole ladder stage (two cascaded ladders, the second of
+    which is a passthrough for slopes of 24 dB/oct and below).
+
+    Everything that differs between slope settings - the tap coefficients, the
+    feedback amounts and the pole placement, which moves by up to 1.1 octaves
+    between 12 and 48 dB/oct - is smoothed.  Without that, changing SLOPE
+    produced an output step 2.7x larger than the signal's own maximum slew; the
+    Butterworth cascade next door has always cross-faded its sections for the
+    same reason. */
 struct LadderCoefficients
 {
     SingleLadderCoefficients ladder[2];
     AnalogCoefficients feedbackShaper;   // identity when ANALOG is 0
     float poleHz = 20.0f;
 
-    void update (float cutoffHz, int slopeIndex, float resonance01, float analog01, float sampleRate) noexcept
+    void update (float cutoffHz, int slopeIndex, float resonance01, float analog01,
+                 float sampleRate, float alpha) noexcept
     {
         const auto& cfg = kLadderConfigs[clampValue (slopeIndex, 0, kNumSlopes - 1)];
-
-        poleHz = clampValue (cutoffHz / cfg.minus3dbScale, 1.0f, 0.49f * sampleRate);
-
         const int orders[2] = { cfg.tapA, cfg.tapB };
+
+        const float targetLogScale = std::log2 (cfg.minus3dbScale);
+        const float targetFeedback[2] = { ladderFeedback (cfg, 0, resonance01),
+                                          cfg.tapB > 0 ? ladderFeedback (cfg, 1, resonance01) : 0.0f };
+
+        if (! initialised)
+        {
+            smoothedLogScale = targetLogScale;
+            for (int i = 0; i < 2; ++i)
+            {
+                smoothedFeedback[i] = targetFeedback[i];
+                for (int t = 0; t < 5; ++t) smoothedTaps[i][t] = ladderTaps (orders[i])[t];
+            }
+            initialised = true;
+        }
+        else
+        {
+            smoothedLogScale += (targetLogScale - smoothedLogScale) * alpha;
+            for (int i = 0; i < 2; ++i)
+            {
+                smoothedFeedback[i] += (targetFeedback[i] - smoothedFeedback[i]) * alpha;
+                const float* target = ladderTaps (orders[i]);
+                for (int t = 0; t < 5; ++t)
+                    smoothedTaps[i][t] += (target[t] - smoothedTaps[i][t]) * alpha;
+            }
+        }
+
+        poleHz = clampValue (cutoffHz / std::exp2 (smoothedLogScale), 1.0f, 0.49f * sampleRate);
 
         for (int i = 0; i < 2; ++i)
         {
-            auto& l = ladder[i];
-            l.active = (orders[i] > 0);
-
-            if (! l.active)
-            {
-                l.setTapOrder (0);
-                l.setPole (poleHz, sampleRate);
-                l.setFeedback (0.0f);
-                continue;
-            }
-
-            l.setTapOrder (orders[i]);
-            l.setPole (poleHz, sampleRate);
-            l.setFeedback (ladderFeedback (cfg, i, resonance01));
+            ladder[i].setPole (poleHz, sampleRate);
+            ladder[i].setFeedback (smoothedFeedback[i]);
+            for (int t = 0; t < 5; ++t) ladder[i].taps[t] = smoothedTaps[i][t];
         }
 
         // The feedback clipper reuses the analogue stage's transfer curve, but
@@ -139,6 +163,14 @@ struct LadderCoefficients
         // output.
         feedbackShaper.updateCustom (analog01, kLadderFeedbackDrive, kLadderFeedbackBias);
     }
+
+    void reset() noexcept { initialised = false; }
+
+private:
+    float smoothedLogScale = 0.0f;
+    float smoothedFeedback[2] {};
+    float smoothedTaps[2][5] {};
+    bool  initialised = false;
 };
 
 /** Per-channel ladder state. */
@@ -156,11 +188,11 @@ public:
 
     inline float process (const LadderCoefficients& c, float x) noexcept
     {
-        for (int i = 0; i < 2; ++i)
-        {
-            if (! c.ladder[i].active) continue;
-            x = processOne (ladders[i], c.ladder[i], c.feedbackShaper, x);
-        }
+        // Both ladders always run.  An unused one carries passthrough taps and
+        // zero feedback, which is bit-exact, so this costs colour nothing and
+        // keeps its state warm for the moment SLOPE brings it in.
+        x = processOne (ladders[0], c.ladder[0], c.feedbackShaper, x);
+        x = processOne (ladders[1], c.ladder[1], c.feedbackShaper, x);
         return x;
     }
 

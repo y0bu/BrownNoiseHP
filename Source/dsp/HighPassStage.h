@@ -57,8 +57,15 @@ public:
     {
         updateBlend (filterMode, alpha);
 
+        // Coming back from CLEAN, the ladder's smoothers hold whatever they had
+        // when it was last switched off - possibly a different slope entirely -
+        // so they are snapped rather than ramped from stale values.
+        if (activatedLadder)
+            ladderCoefficients.reset();
+
         if (needsLadder())
-            ladderCoefficients.update (cutoffHz, slopeIndex, resonance01, analog01, sampleRateForLadder);
+            ladderCoefficients.update (cutoffHz, slopeIndex, resonance01, analog01,
+                                       sampleRateForLadder, alpha);
 
         const auto& cfg = kSlopeConfigs[clampValue (slopeIndex, 0, kNumSlopes - 1)];
         resonantIdx = cfg.numSvfStages - 1;

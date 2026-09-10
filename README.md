@@ -219,9 +219,13 @@ over frequency instead, so every slope reaches exactly 13 dB and no more:
 | 36 | two ladders, 4 + 2 | 3.433 / 2.866 | 13.00 dB | 0.34 × cutoff |
 | 48 | two ladders, 4 + 4 | 3.407 / 3.407 | 13.00 dB | 0.29 × cutoff |
 
-Only the selected topology runs; a MODE change cross-fades over about 30 ms with
-the incoming filter reset first, so it fades in from silence rather than from
-whatever it last held.
+Only the selected *topology* runs; a MODE change cross-fades over about 30 ms
+with the incoming filter reset first, so it fades in from silence rather than
+from whatever it last held. Within LADDER, both ladders always run — an unused
+one carries passthrough taps and zero feedback, which is bit-exact — and the tap
+coefficients, feedback amounts and pole placement are all smoothed, because the
+pole moves by up to 1.1 octaves between 12 and 48 dB/octave and switching that
+abruptly is plainly audible.
 
 ## 6. The brown-noise-inspired tilt
 
@@ -451,17 +455,20 @@ expressed as a percentage of one core:
 
 | mode | Off | 2x (default) | 4x |
 |---|---|---|---|
-| CLEAN, 12 / 24 / 48 dB/oct | 1.7 / 1.7 / 1.6% | 3.1 / 3.4 / 3.1% | 6.2 / 6.0 / 5.5% |
-| LADDER, 12 / 24 / 48 dB/oct | 1.4 / 1.4 / 1.7% | 2.6 / 2.6 / 3.0% | 5.2 / 5.1 / 6.1% |
+| CLEAN, 12 / 24 / 48 dB/oct | 1.8 / 1.7 / 1.6% | 3.3 / 3.0 / 2.9% | 6.3 / 6.0 / 5.9% |
+| LADDER, 12 / 24 / 48 dB/oct | 2.0 / 1.8 / 2.0% | 3.4 / 3.4 / 3.3% | 6.6 / 6.3 / 6.3% |
 
-Three things worth noticing. Cost is **flat across slope settings** in CLEAN —
-all four filter sections always run, with the unused ones cross-faded to a
-bypass, which is what makes SLOPE changes click-free and CPU predictable when
-you have twenty instances open. LADDER is slightly *cheaper* than CLEAN up to
-24 dB/oct (four one-poles and one reciprocal beat four state-variable filters)
-and slightly dearer above it, where it runs two ladders. And there is no FFT
-anywhere, so there is no block-size sensitivity and no latency beyond the
-oversampler's.
+Two things worth noticing. Cost is **flat across slope settings** in both modes,
+and that is deliberate rather than incidental: every filter section always runs,
+with the ones the current slope does not need cross-faded to a bit-exact bypass.
+That is what makes SLOPE changes click-free — and it is not a theoretical
+concern, because before the ladder's tap coefficients and pole placement were
+smoothed, changing SLOPE in LADDER mode produced an output step 2.7x larger than
+the signal's own maximum slew. The side benefit is CPU you can predict with
+twenty instances open.
+
+And there is no FFT anywhere, so there is no block-size sensitivity and no
+latency beyond the oversampler's.
 
 ## 11. Controls
 
@@ -635,7 +642,7 @@ cd build && ctest --output-on-failure
 ./build/Tests/brownsweep_tests Perceptual
 ```
 
-59 tests, ~275,000 assertions, every one of them run against *both* filter
+60 tests, ~275,000 assertions, every one of them run against *both* filter
 topologies where the topology could matter. Coverage:
 
 *Well-formedness* — no NaNs or infinities on silence, impulses, DC, white/pink/
@@ -777,7 +784,7 @@ Source/                     JUCE plugin wrapper
   PluginEditor.h/.cpp
   gui/                      theme, look and feel, response display
 
-Tests/                      59 tests, no external dependencies
+Tests/                      60 tests, no external dependencies
 Tools/SweepAnalysis.cpp     the measurement rig
 Tools/GuiSnapshot.cpp       headless editor screenshot
 .github/workflows/build.yml CI: tests on three platforms, release binaries
