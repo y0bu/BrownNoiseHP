@@ -24,6 +24,7 @@ namespace id
     inline constexpr const char* mix          = "mix";
     inline constexpr const char* output       = "output";
     inline constexpr const char* slope        = "slope";
+    inline constexpr const char* filterMode   = "filtermode";
     inline constexpr const char* autoGain     = "autogain";
     inline constexpr const char* oversampling = "oversampling";
     inline constexpr const char* bypass       = "bypass";
@@ -44,6 +45,7 @@ inline juce::String lfoId (int lfoIndex, const char* suffix)
 }
 
 juce::StringArray slopeChoices();
+juce::StringArray filterModeChoices();
 juce::StringArray oversamplingChoices();
 juce::StringArray lfoShapeChoices();
 juce::StringArray lfoDestinationChoices();
@@ -67,6 +69,7 @@ struct ParameterHandles
     std::atomic<float>* mix          = nullptr;
     std::atomic<float>* output       = nullptr;
     std::atomic<float>* slope        = nullptr;
+    std::atomic<float>* filterMode   = nullptr;
     std::atomic<float>* autoGain     = nullptr;
     std::atomic<float>* oversampling = nullptr;
 

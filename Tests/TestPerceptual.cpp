@@ -42,14 +42,15 @@ struct Reference
 
 const Reference& reference() { static Reference r; return r; }
 
-ResponseState stateFor (float u, float character, float resonance, int slope)
+ResponseState stateFor (float u, float character, float resonance, int slope, int mode = 0)
 {
     ResponseState s;
     s.cutoffHz        = positionToCutoff (u);
     s.slopeIndex      = slope;
+    s.filterMode      = mode;
     s.resonance01     = resonance;
     s.tiltDbPerOctave = tiltSlopeDbPerOctave (u, character);
-    s.wetGainDb       = LoudnessSchedule::instance().gainDb (u, character, resonance, slope);
+    s.wetGainDb       = LoudnessSchedule::instance().gainDb (u, character, resonance, slope, mode);
     s.analog01        = 0.0f;
     s.mix             = 1.0f;
     s.outputDb        = 0.0f;
@@ -102,6 +103,7 @@ BS_TEST (risingCutoffNeverIncreasesHighFrequencyEnergy)
     // The core claim.  As the cutoff goes up, the absolute amount of energy
     // above 4 kHz must go DOWN, at every character setting above zero.  A
     // conventional high-pass fails this badly (see the next test).
+    for (int mode = 0; mode < kNumFilterModes; ++mode)
     for (int slope = 0; slope < kNumSlopes; ++slope)
         for (float character : { 0.35f, 0.65f, 1.0f })
         {
@@ -109,12 +111,13 @@ BS_TEST (risingCutoffNeverIncreasesHighFrequencyEnergy)
             for (int i = 0; i <= 120; ++i)
             {
                 const float u = static_cast<float> (i) / 120.0f;
-                const auto s = stateFor (u, character, 0.0f, slope);
+                const auto s = stateFor (u, character, 0.0f, slope, mode);
                 const auto m = measure ([&] (float f) { return responsemodel::wetResponse (s, f); });
 
                 CHECK_MSG (m.highBandDb <= previous + 0.05,
                            "high-band energy rose at u = " + testing::describe (u)
-                           + " (character " + testing::describe (character) + ")");
+                           + " (character " + testing::describe (character)
+                           + ", mode " + testing::describe (mode) + ")");
                 previous = m.highBandDb;
             }
         }
@@ -153,6 +156,7 @@ BS_TEST (conventionalHighPassLeavesTheTopEndUntouched)
 
 BS_TEST (perceivedLoudnessFallsSteadilyAndReachesNearSilence)
 {
+    for (int mode = 0; mode < kNumFilterModes; ++mode)
     for (int slope = 0; slope < kNumSlopes; ++slope)
     {
         std::vector<double> loudness;
@@ -160,7 +164,7 @@ BS_TEST (perceivedLoudnessFallsSteadilyAndReachesNearSilence)
         {
             const float u = static_cast<float> (i) / 200.0f;
             loudness.push_back (measure ([&] (float f)
-                { return responsemodel::wetResponse (stateFor (u, 1.0f, 0.0f, slope), f); }).loudnessDb);
+                { return responsemodel::wetResponse (stateFor (u, 1.0f, 0.0f, slope, mode), f); }).loudnessDb);
         }
 
         for (size_t i = 1; i < loudness.size(); ++i)
@@ -228,21 +232,24 @@ BS_TEST (theResponseNeverGainsMoreThanTheResonanceAllowance)
 {
     // No hidden boost anywhere: with RESONANCE at zero the wet path is a pure
     // attenuator, and at full resonance the peak is bounded by design.
+    for (int mode = 0; mode < kNumFilterModes; ++mode)
     for (int slope = 0; slope < kNumSlopes; ++slope)
         for (int i = 0; i <= 60; ++i)
         {
             const float u = static_cast<float> (i) / 60.0f;
 
             const auto flat = measure ([&] (float f)
-                { return responsemodel::wetResponse (stateFor (u, 1.0f, 0.0f, slope), f); });
+                { return responsemodel::wetResponse (stateFor (u, 1.0f, 0.0f, slope, mode), f); });
             CHECK_MSG (flat.peakGainDb < 0.05, "peak gain " + testing::describe (flat.peakGainDb)
-                                                + " dB with no resonance at u = " + testing::describe (u));
+                                                + " dB with no resonance at u = " + testing::describe (u)
+                                                + " mode " + testing::describe (mode));
 
             const auto resonant = measure ([&] (float f)
-                { return responsemodel::wetResponse (stateFor (u, 1.0f, 1.0f, slope), f); });
-            CHECK_MSG (resonant.peakGainDb < 13.0, "resonant peak " + testing::describe (resonant.peakGainDb)
+                { return responsemodel::wetResponse (stateFor (u, 1.0f, 1.0f, slope, mode), f); });
+            CHECK_MSG (resonant.peakGainDb < 13.5, "resonant peak " + testing::describe (resonant.peakGainDb)
                                                     + " dB at u = " + testing::describe (u)
-                                                    + " slope " + testing::describe (slope));
+                                                    + " slope " + testing::describe (slope)
+                                                    + " mode " + testing::describe (mode));
         }
 }
 

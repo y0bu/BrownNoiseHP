@@ -25,6 +25,48 @@ Complex highPassResponse (float freqHz, float cutoffHz, int slopeIndex,
     return h;
 }
 
+Complex ladderResponse (float freqHz, float cutoffHz, int slopeIndex,
+                        float resonance01, float sampleRate) noexcept
+{
+    const auto& cfg = kLadderConfigs[clampValue (slopeIndex, 0, kNumSlopes - 1)];
+    const int numLadders = (cfg.tapB > 0) ? 2 : 1;
+
+    const float poleHz = cutoffHz / cfg.minus3dbScale;
+    const float w = omega (freqHz, poleHz, sampleRate);
+
+    const Complex s (0.0f, w);
+    const Complex one (1.0f, 0.0f);
+    const Complex sPlusOne = one + s;
+    const Complex sPlusOne2 = sPlusOne * sPlusOne;
+    const Complex sPlusOne4 = sPlusOne2 * sPlusOne2;
+
+    const int orders[2] = { cfg.tapA, cfg.tapB };
+    Complex h (1.0f, 0.0f);
+
+    for (int i = 0; i < numLadders; ++i)
+    {
+        const int n = orders[i];
+        const float k = ladderFeedback (cfg, i, resonance01);
+
+        Complex numerator (1.0f, 0.0f);
+        for (int j = 0; j < n; ++j)        numerator *= s;
+        for (int j = 0; j < 4 - n; ++j)    numerator *= sPlusOne;
+
+        h *= numerator / (sPlusOne4 + Complex (k, 0.0f));
+    }
+
+    return h;
+}
+
+Complex filterResponse (float freqHz, float cutoffHz, int slopeIndex, int filterMode,
+                        float resonance01, float sampleRate) noexcept
+{
+    if (filterMode == static_cast<int> (FilterMode::ladder))
+        return ladderResponse (freqHz, cutoffHz, slopeIndex, resonance01, sampleRate);
+
+    return highPassResponse (freqHz, cutoffHz, slopeIndex, resonance01, sampleRate);
+}
+
 Complex tiltResponse (float freqHz, float cutoffHz, float tiltDbPerOctave, float sampleRate) noexcept
 {
     if (tiltDbPerOctave <= 1.0e-5f)
@@ -91,7 +133,7 @@ Complex dcBlockerResponse (float freqHz, float sampleRate) noexcept
 
 Complex wetResponse (const ResponseState& s, float freqHz) noexcept
 {
-    Complex h = highPassResponse (freqHz, s.cutoffHz, s.slopeIndex, s.resonance01, s.sampleRate);
+    Complex h = filterResponse (freqHz, s.cutoffHz, s.slopeIndex, s.filterMode, s.resonance01, s.sampleRate);
     h *= tiltResponse (freqHz, s.cutoffHz, s.tiltDbPerOctave, s.sampleRate);
     h *= toneResponse (freqHz, s.bassDb, s.midDb, s.trebleDb, s.sampleRate);
     h *= analogShelfResponse (freqHz, s.analog01, s.sampleRate);
@@ -109,6 +151,8 @@ Complex fullResponse (const ResponseState& s, float freqHz) noexcept
 
 Complex conventionalResponse (const ResponseState& s, float freqHz) noexcept
 {
+    // Always the Butterworth cascade, whichever mode is selected: this curve is
+    // the "what a normal high-pass would do" reference.
     const float mix = clampValue (s.mix, 0.0f, 1.0f);
     const Complex wet = highPassResponse (freqHz, s.cutoffHz, s.slopeIndex, s.resonance01, s.sampleRate);
     const Complex dry (1.0f - mix, 0.0f);

@@ -70,6 +70,14 @@ public:
         return lp;
     }
 
+    inline float processLowpassShared (float x, float bigGIn) noexcept
+    {
+        const float v  = (x - s) * bigGIn;
+        const float lp = v + s;
+        s = lp + v;
+        return lp;
+    }
+
     inline float processHighpass (float x) noexcept { return x - processLowpass (x); }
 
     inline float processHighpass (float x, float bigGIn) noexcept

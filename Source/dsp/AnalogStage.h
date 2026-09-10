@@ -48,10 +48,30 @@ struct AnalogCoefficients
 
     void update (float analog01, float sampleRate) noexcept
     {
+        updateShaper (analog01, kAnalogMaxDrive, kAnalogMaxBias);
+
+        const float g = tptGain (kAnalogHfShelfHz, sampleRate);
+        hfBigG = g / (1.0f + g);
+        hfGain = dbToGain (kAnalogHfShelfMaxDb * clampValue (analog01, 0.0f, 1.0f));
+    }
+
+    /** Shaper only, with a caller-chosen drive and asymmetry - used by the
+        ladder's feedback clipper, which wants to be pushed much harder than the
+        output stage. */
+    void updateCustom (float analog01, float maxDrive, float maxBias) noexcept
+    {
+        updateShaper (analog01, maxDrive, maxBias);
+        hfBigG = 0.5f;
+        hfGain = 1.0f;
+    }
+
+private:
+    void updateShaper (float analog01, float maxDrive, float maxBias) noexcept
+    {
         const float a = clampValue (analog01, 0.0f, 1.0f);
 
-        drive  = a * kAnalogMaxDrive;
-        bias   = a * kAnalogMaxBias;
+        drive  = a * maxDrive;
+        bias   = a * maxBias;
         linear = (drive < 1.0e-5f);
 
         // The offset has to be computed with the *same* function the shaper
@@ -60,10 +80,6 @@ struct AnalogCoefficients
         biasOffset = fastTanh (bias);
         const float tb = std::tanh (bias);
         norm       = 1.0f / std::max (1.0f - tb * tb, 1.0e-6f);
-
-        const float g = tptGain (kAnalogHfShelfHz, sampleRate);
-        hfBigG = g / (1.0f + g);
-        hfGain = dbToGain (kAnalogHfShelfMaxDb * a);
     }
 };
 

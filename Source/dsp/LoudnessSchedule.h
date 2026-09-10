@@ -45,6 +45,9 @@
 
     The table is built once, in the analogue domain, so it is sample-rate
     independent and costs nothing at prepareToPlay time after the first call.
+    It covers both filter topologies, because the LADDER mode's wider knee and
+    loop resonance integrate to a different loudness and the whole point of the
+    contour is that it is measured rather than assumed.
 */
 
 #pragma once
@@ -73,16 +76,18 @@ public:
 
     /** K-weighted level of the linear chain on a pink reference, in dB
         relative to unfiltered pink. */
-    float measuredDb (float u, float character01, float resonance01, int slopeIndex) const noexcept;
+    float measuredDb (float u, float character01, float resonance01,
+                      int slopeIndex, int filterMode) const noexcept;
 
     /** Wet-path gain, in dB, that puts the measured loudness on the designed
         contour.  Always <= 0. */
-    float gainDb (float u, float character01, float resonance01, int slopeIndex) const noexcept;
+    float gainDb (float u, float character01, float resonance01,
+                  int slopeIndex, int filterMode) const noexcept;
 
 private:
     LoudnessSchedule();
 
-    float table[kNumSlopes][kNumU][kNumC][kNumR] {};
+    float table[kNumFilterModes][kNumSlopes][kNumU][kNumC][kNumR] {};
 };
 
 } // namespace bsweep

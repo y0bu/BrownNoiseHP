@@ -8,6 +8,7 @@
 #include "../Source/dsp/AnalogStage.h"
 #include "../Source/dsp/BrownTilt.h"
 #include "../Source/dsp/Filters.h"
+#include "../Source/dsp/LadderStage.h"
 #include "../Source/dsp/Lfo.h"
 #include "../Source/dsp/LoudnessSchedule.h"
 #include "../Source/dsp/Oversampler.h"
@@ -431,12 +432,13 @@ BS_TEST (autoGainNeverBoosts)
 {
     const auto& schedule = LoudnessSchedule::instance();
 
+    for (int mode = 0; mode < kNumFilterModes; ++mode)
     for (int slope = 0; slope < kNumSlopes; ++slope)
         for (int iu = 0; iu <= 100; ++iu)
             for (int ic = 0; ic <= 10; ++ic)
                 for (int ir = 0; ir <= 4; ++ir)
                 {
-                    const float g = schedule.gainDb (iu / 100.0f, ic / 10.0f, ir / 4.0f, slope);
+                    const float g = schedule.gainDb (iu / 100.0f, ic / 10.0f, ir / 4.0f, slope, mode);
                     CHECK_LE (g, 1.0e-4f);
                     CHECK (std::isfinite (g));
                     CHECK_GE (g, -80.0f);
@@ -446,15 +448,17 @@ BS_TEST (autoGainNeverBoosts)
 BS_TEST (autoGainIsUnityWhenCharacterIsZero)
 {
     const auto& schedule = LoudnessSchedule::instance();
-    for (int slope = 0; slope < kNumSlopes; ++slope)
-        for (int iu = 0; iu <= 100; ++iu)
-            CHECK_NEAR (schedule.gainDb (iu / 100.0f, 0.0f, 0.0f, slope), 0.0f, 1.0e-4f);
+    for (int mode = 0; mode < kNumFilterModes; ++mode)
+        for (int slope = 0; slope < kNumSlopes; ++slope)
+            for (int iu = 0; iu <= 100; ++iu)
+                CHECK_NEAR (schedule.gainDb (iu / 100.0f, 0.0f, 0.0f, slope, mode), 0.0f, 1.0e-4f);
 }
 
 BS_TEST (loudnessContourIsMonotonicAndSmooth)
 {
     const auto& schedule = LoudnessSchedule::instance();
 
+    for (int mode = 0; mode < kNumFilterModes; ++mode)
     for (int slope = 0; slope < kNumSlopes; ++slope)
         for (float character : { 0.25f, 0.5f, 0.75f, 1.0f })
         {
@@ -465,7 +469,8 @@ BS_TEST (loudnessContourIsMonotonicAndSmooth)
             {
                 const float u = static_cast<float> (i) / steps;
                 loudness[static_cast<size_t> (i)] =
-                    schedule.measuredDb (u, character, 0.0f, slope) + schedule.gainDb (u, character, 0.0f, slope);
+                    schedule.measuredDb (u, character, 0.0f, slope, mode)
+                        + schedule.gainDb (u, character, 0.0f, slope, mode);
             }
 
             for (int i = 1; i <= steps; ++i)
@@ -488,6 +493,201 @@ BS_TEST (loudnessContourIsMonotonicAndSmooth)
 BS_TEST (loudnessContourReachesNearSilenceAtMaximumCutoff)
 {
     const auto& schedule = LoudnessSchedule::instance();
-    const float atTop = schedule.measuredDb (1.0f, 1.0f, 0.0f, 2) + schedule.gainDb (1.0f, 1.0f, 0.0f, 2);
-    CHECK_LE (atTop, -38.0f);
+    for (int mode = 0; mode < kNumFilterModes; ++mode)
+    {
+        const float atTop = schedule.measuredDb (1.0f, 1.0f, 0.0f, 2, mode)
+                          + schedule.gainDb (1.0f, 1.0f, 0.0f, 2, mode);
+        CHECK_LE (atTop, -38.0f);
+    }
+}
+
+//==============================================================================
+// Ladder topology (the SH-101 mode)
+//==============================================================================
+
+BS_TEST (bothFilterModesPutTheirCornerOnTheCutoffControl)
+{
+    // CUTOFF drives the tilt anchor and the loudness contour, so the two
+    // topologies have to agree about what "cutoff" means.  If they did not,
+    // switching MODE would be a large tone and level jump and automation curves
+    // would stop being portable between them.
+    for (int slope = 0; slope < kNumSlopes; ++slope)
+        for (float fc : { 60.0f, 500.0f, 4000.0f })
+        {
+            const float clean  = gainToDb (std::abs (responsemodel::filterResponse (fc, fc, slope, 0, 0.0f, 0.0f)));
+            const float ladder = gainToDb (std::abs (responsemodel::filterResponse (fc, fc, slope, 1, 0.0f, 0.0f)));
+
+            CHECK_NEAR (clean,  -3.01f, 0.1f);
+            CHECK_NEAR (ladder, -3.01f, 0.1f);
+        }
+}
+
+BS_TEST (ladderReachesItsDesignedResonantPeakAndNoMore)
+{
+    for (int slope = 0; slope < kNumSlopes; ++slope)
+    {
+        const float fc = 1000.0f;
+
+        const auto peakDb = [&] (float resonance)
+        {
+            float best = -1000.0f;
+            for (int i = 0; i <= 4000; ++i)
+            {
+                const float f = fc * std::exp2 (-6.0f + 8.0f * static_cast<float> (i) / 4000.0f);
+                best = std::max (best, gainToDb (std::abs (
+                    responsemodel::ladderResponse (f, fc, slope, resonance, 0.0f))));
+            }
+            return best;
+        };
+
+        // No resonance: a pure attenuator, like every other stage in the plugin.
+        CHECK_LE (peakDb (0.0f), 0.02f);
+
+        // Full resonance: exactly the designed ceiling.
+        CHECK_NEAR (peakDb (1.0f), kLadderMaxPeakDb, 0.3f);
+
+        // ...and monotonic in between, so the control feels even.
+        float previous = -1000.0f;
+        for (int i = 0; i <= 20; ++i)
+        {
+            const float p = peakDb (static_cast<float> (i) / 20.0f);
+            CHECK_GE (p, previous - 0.05f);
+            previous = p;
+        }
+    }
+}
+
+BS_TEST (ladderResonanceSitsBelowTheCornerWhereItsPolesAre)
+{
+    // A signature of the topology rather than an accident: all four poles sit
+    // at cutoff / minus3dbScale, so the peak lands below the -3 dB point.  That
+    // offset is why ladder resonance sounds hollow instead of surgical.
+    const float fc = 1000.0f;
+
+    for (int slope = 0; slope < kNumSlopes; ++slope)
+    {
+        float best = -1000.0f, peakFreq = 0.0f;
+        for (int i = 0; i <= 4000; ++i)
+        {
+            const float f = fc * std::exp2 (-6.0f + 8.0f * static_cast<float> (i) / 4000.0f);
+            const float d = gainToDb (std::abs (responsemodel::ladderResponse (f, fc, slope, 1.0f, 0.0f)));
+            if (d > best) { best = d; peakFreq = f; }
+        }
+
+        const float expected = fc / kLadderConfigs[slope].minus3dbScale;
+        CHECK_MSG (std::abs (std::log2 (peakFreq / expected)) < 0.15f,
+                   "ladder peak at " + testing::describe (peakFreq)
+                   + " Hz, expected near " + testing::describe (expected) + " Hz");
+    }
+}
+
+BS_TEST (ladderNeverBoostsWithoutResonance)
+{
+    for (int slope = 0; slope < kNumSlopes; ++slope)
+        for (int i = 0; i <= 600; ++i)
+        {
+            const float f = 10.0f * std::pow (2200.0f, static_cast<float> (i) / 600.0f);
+            CHECK_LE (std::abs (responsemodel::ladderResponse (f, 400.0f, slope, 0.0f, 96000.0f)), 1.0002f);
+        }
+}
+
+BS_TEST (ladderIsExactlyLinearWhenAnalogIsZero)
+{
+    LadderCoefficients c;
+    c.update (800.0f, 2, 1.0f, 0.0f, 96000.0f);
+    CHECK (c.feedbackShaper.linear);
+
+    // With a linear shaper the feedback residual is identically zero, which is
+    // what keeps the zero-delay solve - and therefore the analytic model -
+    // exact.
+    Xorshift32 rng (17u);
+    LadderState a, b;
+    a.reset();
+    b.reset();
+
+    for (int i = 0; i < 4096; ++i)
+    {
+        const float x = rng.nextBipolar();
+        CHECK (a.process (c, x) == b.process (c, x));
+    }
+    CHECK (a.isFinite());
+}
+
+BS_TEST (ladderFeedbackClipperGeneratesEvenHarmonics)
+{
+    // The asymmetric clipper in the feedback loop is the whole point of the
+    // LADDER mode: a symmetric one would give odd harmonics only, and the
+    // resonance would compress rather than lean.
+    constexpr double fs = 96000.0;
+    constexpr int n = 32768;
+
+    const int slope = 2;                         // 24 dB/oct
+    const float cutoff = 1000.0f;
+    const double poleHz = cutoff / kLadderConfigs[slope].minus3dbScale;
+
+    const auto harmonics = [&] (float analog)
+    {
+        LadderCoefficients c;
+        c.update (cutoff, slope, 1.0f, analog, static_cast<float> (fs));
+
+        LadderState state;
+        state.reset();
+
+        std::vector<std::complex<double>> spec (n);
+        for (int i = 0; i < n; ++i)
+        {
+            const double x = 0.5 * std::sin (2.0 * kPi * poleHz * i / fs);
+            const double y = static_cast<double> (state.process (c, static_cast<float> (x)));
+            const double w = 0.5 - 0.5 * std::cos (2.0 * kPi * i / n);
+            spec[static_cast<size_t> (i)] = { y * w, 0.0 };
+        }
+        fft (spec);
+
+        const auto binEnergy = [&] (double f)
+        {
+            const int k = static_cast<int> (std::round (f * n / fs));
+            double e = 0.0;
+            for (int j = k - 3; j <= k + 3; ++j) e += std::norm (spec[static_cast<size_t> (j)]);
+            return e;
+        };
+
+        return std::pair<double, double> { binEnergy (2.0 * poleHz) / binEnergy (poleHz),
+                                           binEnergy (3.0 * poleHz) / binEnergy (poleHz) };
+    };
+
+    const auto clean  = harmonics (0.0f);
+    const auto driven = harmonics (1.0f);
+
+    CHECK_MSG (clean.first < 1.0e-10, "linear ladder produced a second harmonic: "
+                                       + testing::describe (clean.first));
+    CHECK_MSG (driven.first > 1.0e-5, "driven ladder produced no second harmonic: "
+                                       + testing::describe (driven.first));
+    CHECK_MSG (driven.second > 1.0e-5, "driven ladder produced no third harmonic: "
+                                        + testing::describe (driven.second));
+}
+
+BS_TEST (ladderStaysStableWhenDrivenHard)
+{
+    for (int slope = 0; slope < kNumSlopes; ++slope)
+    {
+        LadderCoefficients c;
+        c.update (300.0f, slope, 1.0f, 1.0f, 96000.0f);
+
+        LadderState state;
+        state.reset();
+
+        Xorshift32 rng (999u);
+        float peak = 0.0f;
+
+        for (int i = 0; i < 400000; ++i)
+        {
+            // Deliberately far too hot: +12 dBFS of noise plus a DC-ish offset.
+            const float x = 4.0f * rng.nextBipolar() + 0.5f;
+            peak = std::max (peak, std::fabs (state.process (c, x)));
+        }
+
+        CHECK (state.isFinite());
+        CHECK_MSG (peak < 200.0f, "ladder peaked at " + testing::describe (peak)
+                                   + " at slope " + testing::describe (slope));
+    }
 }

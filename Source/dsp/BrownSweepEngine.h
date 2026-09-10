@@ -45,6 +45,7 @@ struct EngineParameters
     float mix        = 1.0f;
     float outputDb   = 0.0f;
     int   slopeIndex = 2;        // 24 dB/oct
+    int   filterMode = static_cast<int> (FilterMode::ladder);
     bool  autoGain   = true;
     int   oversamplingFactor = 2;
 

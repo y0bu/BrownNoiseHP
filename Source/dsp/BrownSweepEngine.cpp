@@ -192,7 +192,8 @@ void BrownSweepEngine::processChunk (float* const* channelData, int nch,
     const float tiltDb = tiltSlopeDbPerOctave (u, smCharacter);
 
     const float autoDb = params.autoGain
-        ? LoudnessSchedule::instance().gainDb (u, smCharacter, smResonance, params.slopeIndex)
+        ? LoudnessSchedule::instance().gainDb (u, smCharacter, smResonance,
+                                               params.slopeIndex, params.filterMode)
         : 0.0f;
 
     const float wetTarget = dbToGain (autoDb + modAmpDb);
@@ -207,7 +208,8 @@ void BrownSweepEngine::processChunk (float* const* channelData, int nch,
     smOutGain += (outTarget - smOutGain) * aSlow;
 
     // -- coefficients (shared by every channel) -------------------------------
-    hpStage.update (cutoff, params.slopeIndex, smResonance, smAnalog, needsSnap ? 1.0f : aSlow);
+    hpStage.update (cutoff, params.slopeIndex, params.filterMode, smResonance, smAnalog,
+                    needsSnap ? 1.0f : aSlow, static_cast<float> (osRate));
     tiltCoefficients.update (cutoff, tiltDb, static_cast<float> (osRate));
     toneCoefficients.update (smBassDb, smMidDb, smTrebleDb, static_cast<float> (osRate));
     analogCoefficients.update (smAnalog, static_cast<float> (osRate));
@@ -253,6 +255,8 @@ void BrownSweepEngine::processChunk (float* const* channelData, int nch,
         auto& tilt = tiltState[ch];
         auto& tone = toneState[ch];
         auto& ana  = analogState[ch];
+
+        hp.beginBlock (hpStage);
 
         for (int m = 0; m < osLen; ++m)
         {
@@ -325,6 +329,7 @@ void BrownSweepEngine::publishResponseState (float cutoff, float tilt, float res
     responseState.tiltDbPerOctave = tilt;
     responseState.resonance01     = resonance;
     responseState.slopeIndex      = params.slopeIndex;
+    responseState.filterMode      = params.filterMode;
     responseState.bassDb          = bassDb;
     responseState.midDb           = midDb;
     responseState.trebleDb        = trebleDb;

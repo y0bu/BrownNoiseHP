@@ -131,16 +131,17 @@ double referenceKEnergy (const std::vector<float>& source)
     return std::max (e, 1.0e-30);
 }
 
-std::vector<float> brownSweepMag2 (float u, float character, float resonance, int slope, bool autoGain)
+std::vector<float> brownSweepMag2 (float u, float character, float resonance, int slope, int mode, bool autoGain)
 {
     const auto& g = grid();
 
     ResponseState st;
     st.cutoffHz        = positionToCutoff (u);
     st.slopeIndex      = slope;
+    st.filterMode      = mode;
     st.resonance01     = resonance;
     st.tiltDbPerOctave = tiltSlopeDbPerOctave (u, character);
-    st.wetGainDb       = autoGain ? LoudnessSchedule::instance().gainDb (u, character, resonance, slope) : 0.0f;
+    st.wetGainDb       = autoGain ? LoudnessSchedule::instance().gainDb (u, character, resonance, slope, mode) : 0.0f;
     st.analog01        = 0.0f;
     st.mix             = 1.0f;
     st.outputDb        = 0.0f;
@@ -216,16 +217,16 @@ void reportTiltAccuracy()
     }
 }
 
-void reportSweep (const std::string& sourceName, float character, float resonance, int slope, bool csv)
+void reportSweep (const std::string& sourceName, float character, float resonance, int slope, int mode, bool csv)
 {
     const auto source = sourceSpectrum (sourceName);
     const double ref  = referenceKEnergy (source);
 
     if (! csv)
     {
-        std::printf ("\n== %s | CHARACTER %.0f%% | RESONANCE %.0f%% | %d dB/oct ==\n",
+        std::printf ("\n== %s | CHARACTER %.0f%% | RESONANCE %.0f%% | %d dB/oct | %s ==\n",
                      sourceName.c_str(), character * 100.0f, resonance * 100.0f,
-                     kSlopeConfigs[slope].dbPerOctave);
+                     kSlopeConfigs[slope].dbPerOctave, mode == 1 ? "LADDER" : "CLEAN");
         std::printf ("%7s %6s | %8s %7s %7s | %8s %7s %7s | %7s\n",
                      "cutoff", "tilt",
                      "BS L", "BS cen", "BS >4k", "HP L", "HP cen", "HP >4k", "dL/du");
@@ -243,7 +244,7 @@ void reportSweep (const std::string& sourceName, float character, float resonanc
         const float u  = static_cast<float> (i) / 40.0f;
         const float fc = positionToCutoff (u);
 
-        const auto bs = analyse (source, brownSweepMag2 (u, character, resonance, slope, true), ref);
+        const auto bs = analyse (source, brownSweepMag2 (u, character, resonance, slope, mode, true), ref);
         const auto hp = analyse (source, conventionalMag2 (u, resonance, slope), ref);
 
         const float bsOct = std::log2 (std::max (bs.centroidHz, 1.0f) / fc);
@@ -278,6 +279,7 @@ int main (int argc, char** argv)
     float character = 1.0f;
     float resonance = 0.0f;
     bool  tiltOnly  = false;
+    int   mode      = 0;
     std::string only;
 
     for (int i = 1; i < argc; ++i)
@@ -289,6 +291,8 @@ int main (int argc, char** argv)
         else if (a == "--character" && i + 1 < argc) character = static_cast<float> (std::atof (argv[++i]));
         else if (a == "--resonance" && i + 1 < argc) resonance = static_cast<float> (std::atof (argv[++i]));
         else if (a == "--source" && i + 1 < argc) only = argv[++i];
+        else if (a == "--mode" && i + 1 < argc) mode = std::atoi (argv[++i]);
+        else if (a == "--ladder") mode = 1;
     }
 
     slope = clampValue (slope, 0, kNumSlopes - 1);
@@ -297,14 +301,16 @@ int main (int argc, char** argv)
 
     if (! csv) reportTiltAccuracy();
 
+    mode = clampValue (mode, 0, kNumFilterModes - 1);
+
     if (! only.empty())
     {
-        reportSweep (only, character, resonance, slope, csv);
+        reportSweep (only, character, resonance, slope, mode, csv);
     }
     else
     {
         for (const char* s : { "pink", "brown", "white", "lead" })
-            reportSweep (s, character, resonance, slope, csv);
+            reportSweep (s, character, resonance, slope, mode, csv);
     }
 
     return 0;

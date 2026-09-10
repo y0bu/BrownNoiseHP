@@ -25,6 +25,7 @@ EngineParameters defaultParams()
     p.mix       = 1.0f;
     p.outputDb  = 0.0f;
     p.slopeIndex = 2;
+    p.filterMode = static_cast<int> (FilterMode::clean);
     p.autoGain  = true;
     p.oversamplingFactor = 1;
     p.bpm = 138.0;
@@ -114,9 +115,11 @@ BS_TEST (noiseSourcesStayFiniteAndBounded)
     };
 
     for (auto& src : sources)
+        for (int mode = 0; mode < kNumFilterModes; ++mode)
         for (int factor : { 1, 2, 4 })
         {
             auto p = defaultParams();
+            p.filterMode = mode;
             p.oversamplingFactor = factor;
             p.cutoffHz  = 800.0f;
             p.resonance = 0.8f;
@@ -521,6 +524,71 @@ BS_TEST (bypassSwitchingIsSmooth)
     CHECK_MSG (worstStep < inputMaxStep * 4.0, "worst step on bypass switch " + testing::describe (worstStep));
 }
 
+BS_TEST (filterModeSwitchingIsSmooth)
+{
+    auto p = defaultParams();
+    p.cutoffHz  = 700.0f;
+    p.resonance = 0.8f;
+    p.analog    = 0.6f;
+    p.oversamplingFactor = 1;
+    auto enginePtr = makeEngine (p);
+    auto& engine = *enginePtr;
+
+    const int n = 96000;
+    auto output = duplicate (sine (n, 900.0, kFs, 0.6f), 2);
+    std::vector<float*> ptrs (2);
+
+    const double inputMaxStep = 0.6 * 2.0 * kPi * 900.0 / kFs;
+    double worstStep = 0.0;
+
+    for (int pos = 0; pos < n; pos += 64)
+    {
+        if (pos % 9600 == 0)
+        {
+            p.filterMode = 1 - p.filterMode;
+            engine.setParameters (p);
+        }
+        for (int ch = 0; ch < 2; ++ch) ptrs[static_cast<size_t> (ch)] = output[static_cast<size_t> (ch)].data() + pos;
+        engine.process (ptrs.data(), 2, 64);
+    }
+
+    for (size_t i = 1; i < output[0].size(); ++i)
+        worstStep = std::max (worstStep, std::fabs (static_cast<double> (output[0][i]) - output[0][i - 1]));
+
+    CHECK (allFinite (output[0]));
+    CHECK_MSG (worstStep < inputMaxStep * 4.0, "worst step on mode change " + testing::describe (worstStep));
+    CHECK (engine.getSanitiseCount() == 0);
+}
+
+BS_TEST (ladderModeSurvivesEverythingTheCleanModeDoes)
+{
+    for (int slope = 0; slope < kNumSlopes; ++slope)
+        for (float cutoff : { 20.0f, 250.0f, 3000.0f, 20000.0f })
+        {
+            auto p = defaultParams();
+            p.filterMode = static_cast<int> (FilterMode::ladder);
+            p.slopeIndex = slope;
+            p.cutoffHz   = cutoff;
+            p.resonance  = 1.0f;
+            p.analog     = 1.0f;
+            p.character  = 1.0f;
+            p.oversamplingFactor = 2;
+
+            BrownSweepEngine engine;
+            engine.setParameters (p);
+            engine.prepare (kFs, 256, 2);
+            engine.setParameters (p);
+
+            auto out = runEngine (engine, duplicate (whiteNoise (32768, 5150u), 2), 256);
+
+            CHECK_MSG (allFinite (out[0]), "ladder non-finite at cutoff " + testing::describe (cutoff)
+                                            + " slope " + testing::describe (slope));
+            CHECK_MSG (peak (out[0]) < 8.0f, "ladder peaked at " + testing::describe (peak (out[0]))
+                                              + " at cutoff " + testing::describe (cutoff));
+            CHECK (engine.getSanitiseCount() == 0);
+        }
+}
+
 BS_TEST (latencyMatchesTheOversamplingSetting)
 {
     for (auto pair : { std::pair<int, float> { 1, 0.0f },
@@ -541,10 +609,14 @@ BS_TEST (latencyMatchesTheOversamplingSetting)
 
 BS_TEST (measuredResponseMatchesTheAnalyticModel)
 {
+    // Both topologies: the zero-delay ladder is exactly the bilinear transform
+    // of its analogue prototype too, so the model has to hold there as well.
+    for (int mode = 0; mode < kNumFilterModes; ++mode)
     for (float cutoff : { 200.0f, 1000.0f, 5000.0f })
         for (float resonance : { 0.0f, 0.8f })
         {
             auto p = defaultParams();
+            p.filterMode = mode;
             p.cutoffHz  = cutoff;
             p.resonance = resonance;
             p.character = 1.0f;
@@ -586,7 +658,8 @@ BS_TEST (measuredResponseMatchesTheAnalyticModel)
 
             CHECK_MSG (worst < 0.6, "model/measurement mismatch " + testing::describe (worst)
                                      + " dB at " + testing::describe (worstAt) + " Hz"
-                                     + " (cutoff " + testing::describe (cutoff)
+                                     + " (mode " + testing::describe (mode)
+                                     + ", cutoff " + testing::describe (cutoff)
                                      + ", resonance " + testing::describe (resonance) + ")");
         }
 }

@@ -75,63 +75,73 @@ LoudnessSchedule::LoudnessSchedule()
 
     const double invRef = 1.0 / refEnergy;
 
-    // Response magnitudes are separable: |HP(f)|^2 depends on (slope, u, r),
-    // |tilt(f)|^2 on (u, c).  Computing them once per axis instead of once per
-    // table cell turns a ~180 M flop build into a ~20 M flop one.
+    // Response magnitudes are separable: |filter(f)|^2 depends on (mode, slope,
+    // u, r) and |tilt(f)|^2 only on (u, c), so each axis is evaluated once and
+    // the table cells are plain weighted sums.
     std::vector<float> tiltMag2 (static_cast<size_t> (kNumC * kNumFreq));
     std::vector<float> hpMag2   (static_cast<size_t> (kNumR * kNumFreq));
 
-    for (int is = 0; is < kNumSlopes; ++is)
+    // The tilt depends only on (cutoff, character) - not on the slope and not on
+    // the filter topology - so it is computed once per cutoff position instead
+    // of once per table cell.  That alone is the difference between a ~1.0 M
+    // and a ~0.44 M filter-evaluation build.
+    for (int iu = 0; iu < kNumU; ++iu)
     {
-        for (int iu = 0; iu < kNumU; ++iu)
+        const float u  = static_cast<float> (iu) / static_cast<float> (kNumU - 1);
+        const float fc = positionToCutoff (u);
+
+        for (int ic = 0; ic < kNumC; ++ic)
         {
-            const float u  = static_cast<float> (iu) / static_cast<float> (kNumU - 1);
-            const float fc = positionToCutoff (u);
+            const float c    = static_cast<float> (ic) / static_cast<float> (kNumC - 1);
+            const float tilt = tiltSlopeDbPerOctave (u, c);
 
-            for (int ic = 0; ic < kNumC; ++ic)
+            for (int i = 0; i < kNumFreq; ++i)
             {
-                const float c    = static_cast<float> (ic) / static_cast<float> (kNumC - 1);
-                const float tilt = tiltSlopeDbPerOctave (u, c);
-
-                for (int i = 0; i < kNumFreq; ++i)
-                {
-                    const auto h = responsemodel::tiltResponse (freq[static_cast<size_t> (i)], fc, tilt, 0.0f);
-                    tiltMag2[static_cast<size_t> (ic * kNumFreq + i)] = std::norm (h);
-                }
+                const auto h = responsemodel::tiltResponse (freq[static_cast<size_t> (i)], fc, tilt, 0.0f);
+                tiltMag2[static_cast<size_t> (ic * kNumFreq + i)] = std::norm (h);
             }
+        }
 
-            for (int ir = 0; ir < kNumR; ++ir)
-            {
-                const float r = static_cast<float> (ir) / static_cast<float> (kNumR - 1);
-
-                for (int i = 0; i < kNumFreq; ++i)
-                {
-                    const auto h = responsemodel::highPassResponse (freq[static_cast<size_t> (i)], fc, is, r, 0.0f);
-                    hpMag2[static_cast<size_t> (ir * kNumFreq + i)] = std::norm (h);
-                }
-            }
-
-            for (int ic = 0; ic < kNumC; ++ic)
+        for (int im = 0; im < kNumFilterModes; ++im)
+        {
+            for (int is = 0; is < kNumSlopes; ++is)
             {
                 for (int ir = 0; ir < kNumR; ++ir)
                 {
-                    double energy = 0.0;
-                    for (int i = 0; i < kNumFreq; ++i)
-                        energy += static_cast<double> (weight[static_cast<size_t> (i)])
-                                * static_cast<double> (hpMag2[static_cast<size_t> (ir * kNumFreq + i)])
-                                * static_cast<double> (tiltMag2[static_cast<size_t> (ic * kNumFreq + i)]);
+                    const float r = static_cast<float> (ir) / static_cast<float> (kNumR - 1);
 
-                    table[is][iu][ic][ir] =
-                        static_cast<float> (10.0 * std::log10 (std::max (energy * invRef, 1.0e-12)));
+                    for (int i = 0; i < kNumFreq; ++i)
+                    {
+                        const auto h = responsemodel::filterResponse (freq[static_cast<size_t> (i)],
+                                                                      fc, is, im, r, 0.0f);
+                        hpMag2[static_cast<size_t> (ir * kNumFreq + i)] = std::norm (h);
+                    }
+                }
+
+                for (int ic = 0; ic < kNumC; ++ic)
+                {
+                    for (int ir = 0; ir < kNumR; ++ir)
+                    {
+                        double energy = 0.0;
+                        for (int i = 0; i < kNumFreq; ++i)
+                            energy += static_cast<double> (weight[static_cast<size_t> (i)])
+                                    * static_cast<double> (hpMag2[static_cast<size_t> (ir * kNumFreq + i)])
+                                    * static_cast<double> (tiltMag2[static_cast<size_t> (ic * kNumFreq + i)]);
+
+                        table[im][is][iu][ic][ir] =
+                            static_cast<float> (10.0 * std::log10 (std::max (energy * invRef, 1.0e-12)));
+                    }
                 }
             }
         }
     }
 }
 
-float LoudnessSchedule::measuredDb (float u, float character01, float resonance01, int slopeIndex) const noexcept
+float LoudnessSchedule::measuredDb (float u, float character01, float resonance01,
+                                    int slopeIndex, int filterMode) const noexcept
 {
     const int is = clampValue (slopeIndex, 0, kNumSlopes - 1);
+    const int im = clampValue (filterMode, 0, kNumFilterModes - 1);
 
     const float fu = clampValue (u,           0.0f, 1.0f) * (kNumU - 1);
     const float fc = clampValue (character01, 0.0f, 1.0f) * (kNumC - 1);
@@ -150,8 +160,8 @@ float LoudnessSchedule::measuredDb (float u, float character01, float resonance0
     const auto plane = [&] (int uIndex)
     {
         const int uu = clampValue (uIndex, 0, kNumU - 1);
-        const float a = lerp (table[is][uu][ic][ir],     table[is][uu][ic + 1][ir],     tc);
-        const float b = lerp (table[is][uu][ic][ir + 1], table[is][uu][ic + 1][ir + 1], tc);
+        const float a = lerp (table[im][is][uu][ic][ir],     table[im][is][uu][ic + 1][ir],     tc);
+        const float b = lerp (table[im][is][uu][ic][ir + 1], table[im][is][uu][ic + 1][ir + 1], tc);
         return lerp (a, b, tr);
     };
 
@@ -168,9 +178,10 @@ float LoudnessSchedule::measuredDb (float u, float character01, float resonance0
     return catmullRom (guarded (iu - 1), guarded (iu), guarded (iu + 1), guarded (iu + 2), tu);
 }
 
-float LoudnessSchedule::gainDb (float u, float character01, float resonance01, int slopeIndex) const noexcept
+float LoudnessSchedule::gainDb (float u, float character01, float resonance01,
+                                int slopeIndex, int filterMode) const noexcept
 {
-    const float measured = measuredDb (u, character01, resonance01, slopeIndex);
+    const float measured = measuredDb (u, character01, resonance01, slopeIndex, filterMode);
     const float target   = loudnessTargetDb (u, character01);
 
     // Never positive: AUTO is an attenuator, so it can never lift the noise

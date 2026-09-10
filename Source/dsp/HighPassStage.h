@@ -28,12 +28,21 @@
     means the level-dependent damping (the "analogue" term) sees an already
     high-passed signal, so the resonance blooms and settles the way a real
     cascaded filter does instead of ringing at a constant amplitude.
+
+    Mode switching
+    --------------
+    The stage also owns the LADDER topology (see LadderStage.h).  Only the
+    selected one runs; a mode change cross-fades between them over ~30 ms, with
+    the incoming topology reset to zero state first so it fades in from silence
+    rather than from whatever it last held.  Outside a transition the cost is
+    exactly one topology, so choosing a mode does not cost CPU.
 */
 
 #pragma once
 
 #include "DesignConstants.h"
 #include "Filters.h"
+#include "LadderStage.h"
 
 namespace bsweep
 {
@@ -43,14 +52,14 @@ class HighPassStage
 public:
     void prepare (float sr) noexcept { sampleRate = sr; }
 
-    /** Jump every smoothed quantity straight to its target (used on reset). */
-    void snap (float cutoffHz, int slopeIndex, float resonance01) noexcept
+    void update (float cutoffHz, int slopeIndex, int filterMode, float resonance01,
+                 float analog01, float alpha, float sampleRateForLadder) noexcept
     {
-        update (cutoffHz, slopeIndex, resonance01, 0.0f, 1.0f);
-    }
+        updateBlend (filterMode, alpha);
 
-    void update (float cutoffHz, int slopeIndex, float resonance01, float analog01, float alpha) noexcept
-    {
+        if (needsLadder())
+            ladderCoefficients.update (cutoffHz, slopeIndex, resonance01, analog01, sampleRateForLadder);
+
         const auto& cfg = kSlopeConfigs[clampValue (slopeIndex, 0, kNumSlopes - 1)];
         resonantIdx = cfg.numSvfStages - 1;
 
@@ -79,7 +88,17 @@ public:
         cutoff  = cutoffHz;
     }
 
-    const SvfCoefficients& svfCoefficients (int i) const noexcept { return coeffs[i]; }
+    const SvfCoefficients&   svfCoefficients (int i) const noexcept { return coeffs[i]; }
+    const LadderCoefficients& ladder()          const noexcept { return ladderCoefficients; }
+
+    /** 0 = CLEAN only, 1 = LADDER only, in between = cross-fading. */
+    float modeBlend() const noexcept { return blend; }
+    bool  needsClean()  const noexcept { return blend < 1.0f; }
+    bool  needsLadder() const noexcept { return blend > 0.0f; }
+
+    /** True for the one block on which a topology becomes active again. */
+    bool  cleanJustActivated()  const noexcept { return activatedClean; }
+    bool  ladderJustActivated() const noexcept { return activatedLadder; }
     float activation (int i)   const noexcept { return activations[i]; }
     float qOf (int i)          const noexcept { return qSmoothed[i]; }
     float onePoleG()           const noexcept { return onePoleBigG; }
@@ -89,8 +108,28 @@ public:
     float cutoffHz()           const noexcept { return cutoff; }
 
 private:
+    void updateBlend (int filterMode, float alpha) noexcept
+    {
+        const bool wantsClean  = blend < 1.0f;
+        const bool wantsLadder = blend > 0.0f;
+
+        const float target = (filterMode == static_cast<int> (FilterMode::ladder)) ? 1.0f : 0.0f;
+        blend += (target - blend) * alpha;
+
+        // Snap to the endpoints so that outside a transition exactly one
+        // topology runs and the other can stay switched off entirely.
+        if (std::abs (blend - target) < 1.0e-4f) blend = target;
+
+        activatedClean  = (blend < 1.0f) && ! wantsClean;
+        activatedLadder = (blend > 0.0f) && ! wantsLadder;
+    }
+
     float sampleRate = 48000.0f;
     SvfCoefficients coeffs[kMaxSvfStages];
+    LadderCoefficients ladderCoefficients;
+    float blend = 0.0f;
+    bool  activatedClean = false;
+    bool  activatedLadder = false;
     float qSmoothed[kMaxSvfStages]   { 0.70710678f, 0.70710678f, 0.70710678f, 0.70710678f };
     float activations[kMaxSvfStages] { 1.0f, 0.0f, 0.0f, 0.0f };
     float onePoleBigG = 0.5f;
@@ -108,9 +147,41 @@ public:
     {
         for (auto& s : svf) s.reset();
         onePole.reset();
+        ladder.reset();
+    }
+
+    /** Called once per control block, before the sample loop. */
+    void beginBlock (const HighPassStage& st) noexcept
+    {
+        if (st.cleanJustActivated())
+        {
+            for (auto& s : svf) s.reset();
+            onePole.reset();
+        }
+        if (st.ladderJustActivated())
+            ladder.reset();
     }
 
     inline float process (const HighPassStage& st, float x) noexcept
+    {
+        const float blend = st.modeBlend();
+
+        if (blend <= 0.0f) return processClean (st, x);
+        if (blend >= 1.0f) return ladder.process (st.ladder(), x);
+
+        const float clean = processClean (st, x);
+        const float lad   = ladder.process (st.ladder(), x);
+        return lerp (clean, lad, blend);
+    }
+
+    bool isFinite() const noexcept
+    {
+        for (const auto& s : svf) if (! s.isFinite()) return false;
+        return onePole.isFinite() && ladder.isFinite();
+    }
+
+private:
+    inline float processClean (const HighPassStage& st, float x) noexcept
     {
         const int   resIdx  = st.resonantIndex();
         const float damping = st.nonlinearDamping();
@@ -129,15 +200,9 @@ public:
         return x;
     }
 
-    bool isFinite() const noexcept
-    {
-        for (const auto& s : svf) if (! s.isFinite()) return false;
-        return onePole.isFinite();
-    }
-
-private:
-    SvfTpt     svf[kMaxSvfStages];
-    OnePoleTpt onePole;
+    SvfTpt      svf[kMaxSvfStages];
+    OnePoleTpt  onePole;
+    LadderState ladder;
 };
 
 } // namespace bsweep

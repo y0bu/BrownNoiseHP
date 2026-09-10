@@ -56,15 +56,15 @@ private:
     bsgui::LabelledKnob mixKnob       { "MIX" };
     bsgui::LabelledKnob outputKnob    { "OUTPUT" };
 
-    juce::ComboBox slopeBox, oversamplingBox;
+    juce::ComboBox slopeBox, modeBox, oversamplingBox;
     juce::ToggleButton autoGainButton { "AUTO GAIN" };
-    juce::Label slopeLabel, oversamplingLabel;
+    juce::Label slopeLabel, modeLabel, oversamplingLabel;
 
     LfoStrip lfo[2];
 
     std::unique_ptr<SliderAttachment>   cutoffAttachment, characterAttachment, analogAttachment,
                                         resonanceAttachment, mixAttachment, outputAttachment;
-    std::unique_ptr<ComboBoxAttachment> slopeAttachment, oversamplingAttachment;
+    std::unique_ptr<ComboBoxAttachment> slopeAttachment, modeAttachment, oversamplingAttachment;
     std::unique_ptr<ButtonAttachment>   autoGainAttachment;
 
     juce::Rectangle<int> headerArea, controlArea, settingsArea, lfoArea;

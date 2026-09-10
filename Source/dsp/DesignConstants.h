@@ -82,6 +82,109 @@ constexpr SlopeConfig kSlopeConfigs[kNumSlopes] =
 constexpr float kResonanceQFactor = 2.98f;
 
 //==============================================================================
+// Filter topology
+//==============================================================================
+
+/** Two filter topologies, chosen by the MODE control.
+
+    CLEAN   Butterworth-aligned cascade of TPT state-variable sections.  Precise,
+            neutral, maximally flat passband, resonance sitting exactly on the
+            corner.
+
+    LADDER  A four-stage OTA ladder with a single global feedback loop and an
+            asymmetric soft-clipper in that loop - the topology of the IR3109
+            chip in the Roland SH-101 and Juno series, adapted to a high-pass by
+            binomial tap mixing.  Three things come out of it and none of them
+            can be dialled in on the CLEAN filter:
+
+              * all four poles sit at the same frequency, so the knee is wide
+                and soft instead of maximally flat - a "gentler entrance" into
+                the sweep;
+              * the resonance is a property of the whole loop rather than of one
+                section, so it blooms and interacts with everything;
+              * the feedback clipper is asymmetric, so driving the resonance
+                generates even harmonics and the peak leans - the bold, slightly
+                honking character the SH-101 is known for.
+
+    Note that in a high-pass ladder the feedback tap carries the *low* end - the
+    part the filter is removing.  Sweeping upward therefore drives the resonance
+    non-linearly with the disappearing bass, which is a large part of why the
+    LADDER mode feels alive under automation in a way the CLEAN one does not. */
+enum class FilterMode { clean = 0, ladder, numModes };
+
+constexpr int kNumFilterModes = static_cast<int> (FilterMode::numModes);
+
+/** Ladder configuration per slope setting.
+
+    The four-stage ladder is tapped with binomial coefficients to give a 1- to
+    4-pole high-pass; slopes steeper than 24 dB/oct cascade a second ladder
+    rather than adding plain poles, because plain poles would eat the resonant
+    peak (each one costs it 3 dB at the corner) and leave 48 dB/oct with almost
+    no resonance left.
+
+    minus3dbScale is f(-3 dB) / f(pole) for `order` identical poles.  The ladder
+    runs its poles at cutoff / minus3dbScale so that BOTH modes put their -3 dB
+    point exactly on the CUTOFF control.  This matters more than it sounds:
+    CUTOFF drives the tilt anchor and the loudness contour, so if the two modes
+    disagreed about what "cutoff" means, switching mode would be a large tone
+    and level jump and automation curves would stop being portable.
+
+    The consequence is that the ladder's resonant peak sits *below* the corner,
+    where its poles are.  That offset is not a defect - it is exactly why ladder
+    resonance sounds hollow and vocal rather than surgical. */
+struct LadderConfig
+{
+    int   order;           // total poles
+    int   tapA;            // binomial tap order of the first ladder
+    int   tapB;            // second ladder, 0 when unused
+    float minus3dbScale;
+    float maxFeedbackA;    // k at RESONANCE = 100%
+    float maxFeedbackB;
+    int   dbPerOctave;
+};
+
+/** Peak of the resonance at RESONANCE = 100%, in dB above unity.  Matches the
+    CLEAN mode's ceiling so the two topologies stay comparable and safe. */
+constexpr float kLadderMaxPeakDb = 13.0f;
+
+/** The maxFeedback values below are not analytic.  The obvious closed form -
+    solve |H| at the pole frequency, where (1+j)^4 is real and the denominator
+    collapses to |k-4| - is wrong, because as k rises the peak *moves* off the
+    pole frequency and grows past that estimate; using it overshot the 13 dB
+    ceiling by 2.5 to 4.3 dB depending on slope.  These are the k values found
+    by bisecting on the true maximum of |H| over frequency, so every slope
+    reaches exactly 13 dB and no more.  For the two-ladder configurations the
+    peak is split evenly between the ladders in dB. */
+constexpr LadderConfig kLadderConfigs[kNumSlopes] =
+{
+    { 2, 2, 0, 1.55377f, 3.41748f, 0.0f,     12 },
+    { 3, 3, 0, 1.96146f, 3.58349f, 0.0f,     18 },
+    { 4, 4, 0, 2.29899f, 3.70207f, 0.0f,     24 },
+    { 6, 4, 2, 2.85760f, 3.43314f, 2.86627f, 36 },
+    { 8, 4, 4, 3.32388f, 3.40716f, 3.40716f, 48 }
+};
+
+/** Global feedback amount for one ladder of a configuration.
+
+    An ideal four-pole ladder self-oscillates at k = 4.  Rather than exposing
+    that directly, k approaches its calibrated maximum geometrically in the
+    distance from 4, which makes the peak height in dB close to linear in the
+    RESONANCE control - the only mapping that feels even under the knob. */
+inline float ladderFeedback (const LadderConfig& cfg, int ladderIndex, float resonance01) noexcept
+{
+    const float kMax = (ladderIndex == 0) ? cfg.maxFeedbackA : cfg.maxFeedbackB;
+    return 4.0f * (1.0f - std::pow (1.0f - 0.25f * kMax, clampValue (resonance01, 0.0f, 1.0f)));
+}
+
+/** Drive into the ladder's feedback clipper at ANALOG = 100%, and the DC offset
+    that makes it asymmetric.  Higher than the output stage's drive: this is
+    where the SH-101 character actually lives, and the feedback path is the one
+    place a filter can be pushed hard without the result reading as distortion
+    on the dry signal. */
+constexpr float kLadderFeedbackDrive = 3.0f;
+constexpr float kLadderFeedbackBias  = 0.22f;
+
+//==============================================================================
 // Brown-noise-inspired spectral tilt
 //==============================================================================
 

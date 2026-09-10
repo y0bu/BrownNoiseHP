@@ -95,11 +95,13 @@ features, a well-designed IIR is simply the better tool.
 ## 4. Signal chain
 
 ```
-IN ──┬───────────────────────────────────────────────[ dry delay ]──┐
-     │                                                              │
-     └─[ up 2x/4x ]─ HP cascade ─ brown tilt ─ tone ─ analogue ─[ down ]─ × AUTO gain ─┤
-                                                                                       │
-                                                                    MIX ───────────────┴─── × OUTPUT ── OUT
+IN ──┬────────────────────────────────────────────────[ dry delay ]──┐
+     │                                                               │
+     └─[ up 2x/4x ]─ filter ─ brown tilt ─ tone ─ analogue ─[ down ]─┤
+                       │                                             │
+                CLEAN cascade                            × AUTO gain │
+                       or                                            │
+                LADDER (SH-101)                    MIX ──────────────┴── × OUTPUT ── OUT
 ```
 
 Every coefficient is recomputed once per ~0.35 ms control block and **shared by
@@ -110,10 +112,12 @@ The tone stage (a low shelf at 180 Hz, a wide bell at 900 Hz, a high shelf at
 3.2 kHz) is flat by default and exists only as LFO destinations. At 0 dB each
 section is a bit-exact bypass.
 
-## 5. The high-pass stage
+## 5. The filter stage: two topologies
 
-A cascade of Butterworth-aligned TPT (zero-delay-feedback) state-variable
-sections, 12 / 18 / 24 / 36 / 48 dB per octave.
+There is one MODE control, with two genuinely different filters behind it. Both
+are TPT (zero-delay-feedback) structures, and both place their −3 dB point
+exactly on the CUTOFF control, so switching between them is not a tone or level
+jump and automation curves stay portable.
 
 **Why TPT and not biquads.** Cutoff is the main automation target, so
 coefficients change on every control block. Direct-form biquads misbehave under
@@ -122,18 +126,102 @@ coefficients think it means — which is precisely the "digital zipper" this
 plugin is trying to avoid. TPT structures keep their state in physically
 meaningful integrator variables and stay well conditioned at 20 Hz / 192 kHz.
 They are also exactly the bilinear transform of their analogue prototype, which
-makes the response model in §6 *exact* rather than approximate.
+makes the response model in §13 *exact* rather than approximate — for the ladder
+as much as for the cascade.
+
+### CLEAN — Butterworth cascade
+
+Cascaded TPT state-variable sections with Butterworth-aligned Q values, 12 / 18 /
+24 / 36 / 48 dB per octave. Maximally flat passband, textbook knee, resonance
+sitting exactly on the corner. This is the neutral, surgical option.
+
+RESONANCE multiplies the Q of the *last* active section only, up to a peak about
+12 dB above the Butterworth response. Placing it last means the level-dependent
+damping (§8) sees an already high-passed signal, so the resonance blooms and
+settles the way a real cascaded filter does.
 
 **Slope morphing without clicks.** All four SVF sections always run. Sections the
 current slope does not need are cross-faded to an algebraic bypass rather than
 switched off, and their Q targets are smoothed, so changing SLOPE mid-performance
 cannot click and CPU cost is independent of slope.
 
-**Resonance** multiplies the Q of the *last* active section only, up to a peak
-about 12 dB above the Butterworth response. Deliberately modest: self-oscillation
-would fight the perceptual-balance concept. Placing it last means the
-level-dependent damping (§8) sees an already high-passed signal, so the resonance
-blooms and settles the way a real cascaded analogue filter does.
+### LADDER — SH-101-style OTA ladder
+
+Four TPT one-pole stages in series with a single global feedback loop, solved
+zero-delay, tapped with binomial coefficients to produce a high-pass:
+
+```
+u  = x − k·y4                        (feedback from the low-pass tap)
+yn = LP(y[n−1]),  y0 = u
+HP = Σ C(N,j)(−1)^j y_j  =  u·(s/(1+s))^N
+```
+
+which is exactly
+
+```
+H(s) = s^N (1+s)^(4−N) / ( (1+s)^4 + k )
+```
+
+That is the topology of the IR3109 chip in the Roland SH-101 and Juno series,
+adapted from low-pass to high-pass by the tap mixing. Three things come out of
+it that cannot be dialled in on the Butterworth cascade:
+
+* **A wide, soft knee.** All four poles sit at the same frequency instead of
+  being spread for maximal flatness, so the filter eases into the sweep instead
+  of stepping into it. Measured two octaves below a 24 dB/oct corner, the
+  cascade is already at its asymptotic −24 dB/octave; the ladder is still only
+  at −14.4 dB/octave and does not reach its asymptote until much further down.
+  That difference *is* the "gentler, bolder" feel.
+* **Resonance that belongs to the whole loop**, not to one section — so it
+  interacts with everything, and it sits where the poles are, about 1.2 octaves
+  below the corner at 24 dB/octave. That offset is not a defect: it is why
+  ladder resonance sounds hollow and vocal rather than surgical.
+* **An asymmetric clipper inside the feedback loop.** A real ladder clips in the
+  loop, and in the IR3109 it clips lopsidedly. Solving that exactly needs an
+  iteration per sample, so it is applied as a *residual* instead:
+
+  ```
+  x' = x + k·(yPrev − saturate(yPrev))
+  ```
+
+  and the ordinary linear zero-delay solve runs on `x'`. When `saturate` is the
+  identity the residual is exactly zero, so ANALOG = 0 leaves the filter
+  perfectly linear and the analytic model exact; when it is not, the correction
+  is the saturator's bounded residual carried one sample, which keeps the
+  structure unconditionally stable while still producing the level-dependent,
+  lopsided resonance a symmetric clipper cannot. The test suite checks that a
+  linear ladder produces no second harmonic at all and that a driven one does.
+
+There is one more consequence, specific to using a ladder as a high-pass: **the
+feedback tap carries the low end — the part the filter is throwing away.**
+Sweeping the cutoff upward therefore feeds the disappearing bass into the
+clipper, so the resonance growls and settles as the sweep moves rather than
+sitting still. That is most of why LADDER feels alive under automation.
+
+Slopes steeper than 24 dB/octave cascade a *second* ladder rather than adding
+plain poles. Plain poles would cost the resonant peak 3 dB each at the corner
+and leave 48 dB/octave with almost nothing, whereas two ladders split the peak
+between them and keep both loops well away from self-oscillation.
+
+**Resonance calibration.** An ideal four-pole ladder self-oscillates at k = 4.
+The obvious closed form for the peak — evaluate |H| at the pole frequency, where
+(1+j)⁴ is real and the denominator collapses to |k−4| — is wrong, because as k
+rises the peak *moves off* the pole frequency and grows past that estimate.
+Using it overshot the 13 dB ceiling by 2.5 to 4.3 dB depending on slope. The
+values in `DesignConstants.h` were found by bisecting on the true maximum of |H|
+over frequency instead, so every slope reaches exactly 13 dB and no more:
+
+| slope | topology | k at RESONANCE 100% | peak | peak frequency |
+|---|---|---|---|---|
+| 12 dB/oct | one ladder, 2-pole tap | 3.417 | 13.00 dB | 0.62 × cutoff |
+| 18 | one ladder, 3-pole tap | 3.583 | 13.00 dB | 0.50 × cutoff |
+| 24 | one ladder, 4-pole tap | 3.702 | 13.00 dB | 0.43 × cutoff |
+| 36 | two ladders, 4 + 2 | 3.433 / 2.866 | 13.00 dB | 0.34 × cutoff |
+| 48 | two ladders, 4 + 4 | 3.407 / 3.407 | 13.00 dB | 0.29 × cutoff |
+
+Only the selected topology runs; a MODE change cross-fades over about 30 ms with
+the incoming filter reset first, so it fades in from silence rather than from
+whatever it last held.
 
 ## 6. The brown-noise-inspired tilt
 
@@ -328,23 +416,52 @@ The resonant peak gains back more than the removed low end cost. There is no
 automation curve you can draw over that which sounds like a fade. BrownSweep on
 the same source and settings falls monotonically to −37.0 dB.
 
-## 10a. CPU
+### Does the topology change any of that?
 
-Measured with `Tools/`-style timing on a 4-core cloud VM (a deliberately modest
-machine — a desktop CPU is considerably faster), one stereo instance at 48 kHz
-with both LFOs running, expressed as a percentage of one core:
+No — and that is the point of measuring rather than assuming. The loudness
+contour is derived from the *actual* response of whichever topology is selected
+(`LoudnessSchedule` carries a filter-mode axis), so LADDER lands on the same
+designed trajectory as CLEAN. Same source, same settings, LADDER instead of
+CLEAN:
 
-| oversampling | 12 dB/oct | 24 dB/oct | 48 dB/oct |
+| cutoff | CLEAN loudness | LADDER loudness | CLEAN centroid | LADDER centroid | conventional HP centroid |
+|---|---|---|---|---|---|
+| 134 Hz | −5.00 dB | −5.01 dB | 1214 Hz | 1199 Hz | 1673 Hz |
+| 532 Hz | −14.83 | −14.83 | 1779 | 1646 | 3331 |
+| 1.06 kHz | −19.98 | −19.98 | 2705 | 2431 | 4698 |
+| 4.23 kHz | −30.50 | −30.50 | 7592 | 6531 | 9305 |
+| 16.8 kHz | −41.31 | −41.23 | 17149 | 13880 | 17317 |
+
+The loudness trajectories are identical to two decimal places, and the ladder's
+wider knee actually keeps the centroid *lower* — up to 3.3 kHz lower at the top
+of the range — because more of the surviving energy stays near the corner
+instead of being pushed above it.
+
+The one place the modes genuinely diverge is with resonance on real material.
+On the synthetic lead at RESONANCE 70%, a conventional high-pass at a 95 Hz
+cutoff is **1.5 dB louder than it was at 20 Hz** — the resonant peak more than
+pays back the removed low end — while BrownSweep in LADDER mode is already
+2.7 dB down and still falling monotonically.
+
+### CPU
+
+Measured on a 4-core cloud VM (a deliberately modest machine — a desktop CPU is
+considerably faster), one stereo instance at 48 kHz with both LFOs running,
+expressed as a percentage of one core:
+
+| mode | Off | 2x (default) | 4x |
 |---|---|---|---|
-| Off | 1.6% | 1.6% | 1.5% |
-| 2x (default) | 3.0% | 2.9% | 2.7% |
-| 4x | 5.9% | 6.2% | 5.5% |
+| CLEAN, 12 / 24 / 48 dB/oct | 1.7 / 1.7 / 1.6% | 3.1 / 3.4 / 3.1% | 6.2 / 6.0 / 5.5% |
+| LADDER, 12 / 24 / 48 dB/oct | 1.4 / 1.4 / 1.7% | 2.6 / 2.6 / 3.0% | 5.2 / 5.1 / 6.1% |
 
-Two things worth noticing. Cost is **flat across slope settings** — all four
-filter sections always run, with the unused ones cross-faded to a bypass, which
-is what makes SLOPE changes click-free and makes CPU predictable when you have
-twenty instances open. And there is no FFT anywhere, so there is no block-size
-sensitivity and no latency beyond the oversampler's.
+Three things worth noticing. Cost is **flat across slope settings** in CLEAN —
+all four filter sections always run, with the unused ones cross-faded to a
+bypass, which is what makes SLOPE changes click-free and CPU predictable when
+you have twenty instances open. LADDER is slightly *cheaper* than CLEAN up to
+24 dB/oct (four one-poles and one reciprocal beat four state-variable filters)
+and slightly dearer above it, where it runs two ladders. And there is no FFT
+anywhere, so there is no block-size sensitivity and no latency beyond the
+oversampler's.
 
 ## 11. Controls
 
@@ -356,13 +473,14 @@ sensitivity and no latency beyond the oversampler's.
 | **RESONANCE** | 0 – 100% | 0% | Up to about +12 dB at the corner. Interacts with ANALOG. |
 | **MIX** | 0 – 100% | 100% | Latency-compensated. |
 | **OUTPUT** | −24 – +24 dB | 0 dB | Final trim, after the mix. |
-| **SLOPE** | 12/18/24/36/48 dB/oct | 24 | Morphs without clicking. The concept works identically at every setting. |
+| **MODE** | Clean / Ladder | Ladder | Filter topology. CLEAN is a Butterworth cascade; LADDER is the SH-101-style OTA ladder of §5. Cross-fades on change. |
+| **SLOPE** | 12/18/24/36/48 dB/oct | 24 | Morphs without clicking. The concept works identically at every setting and in both modes. |
 | **AUTO GAIN** | on/off | on | The loudness contour of §7. Off = the raw filter, for A/B and for your own gain staging. |
 | **OVERSAMPLING** | Off / 2x / 4x | 2x | Not automatable — it changes the reported latency. |
 
-All of CUTOFF, CHARACTER, ANALOG, RESONANCE, MIX, OUTPUT, SLOPE and AUTO GAIN,
-plus every LFO parameter, are exposed as automatable VST3 parameters and are
-smoothed. Cutoff is smoothed in log₂(Hz) over 60 ms, so even a coarsely stepped
+All of CUTOFF, CHARACTER, ANALOG, RESONANCE, MIX, OUTPUT, MODE, SLOPE and AUTO
+GAIN, plus every LFO parameter, are exposed as automatable VST3 parameters and
+are smoothed. Cutoff is smoothed in log₂(Hz) over 60 ms, so even a coarsely stepped
 host automation curve arrives as a continuous glide.
 
 ### CHARACTER, practically
@@ -374,6 +492,20 @@ host automation curve arrives as a continuous glide.
 * **65% (default)** — the intended sound: sweeps read as the source receding.
 * **100%** — full brown weighting. Large cutoff moves become large energy moves;
   best for slow build-ups where the filter *is* the arrangement.
+
+### MODE, practically
+
+* **LADDER (default)** — the bold one. A softer entrance into the sweep, a
+  resonance that sings below the corner and leans as it is driven, and even
+  harmonics from the feedback clipper once ANALOG is up. Because the feedback
+  tap carries the low end being removed, the character changes *as* the sweep
+  moves. This is the setting the plugin is voiced around.
+* **CLEAN** — the precise one. Flat passband, resonance exactly on the corner,
+  no loop non-linearity. Use it when the high-pass is doing a job rather than
+  making a statement, or as the A/B reference for what LADDER is adding.
+
+The two modes agree to within 0.1 dB at the cutoff with no resonance, so
+switching is a change of character, not of level.
 
 ## 12. LFOs
 
@@ -399,8 +531,9 @@ transparent when not modulated.
 
 Two curves, both computed from `ResponseModel`:
 
-* dim — what a **conventional** high-pass of the same cutoff, slope and resonance
-  would do;
+* dim — what a **conventional** Butterworth high-pass at the same cutoff, slope
+  and resonance would do (always the Butterworth reference, whichever MODE is
+  selected, so the comparison stays meaningful);
 * bright — what **BrownSweep** is doing right now, including the AUTO gain, the
   tone stage, the analogue shelf and the dry/wet mix.
 
@@ -410,7 +543,26 @@ the DSP's transfer function. The test suite verifies this by FFT-ing the engine'
 measured impulse response and comparing: agreement is better than 0.6 dB
 everywhere above −80 dB.
 
-## 14. Building
+## 14. Getting it
+
+### Ready-built
+
+Every tagged release ships VST3 and Standalone builds for Windows (x64), macOS
+(arm64 + x86_64 universal) and Linux (x86_64), produced by the GitHub Actions
+workflow in `.github/workflows/build.yml` directly from this source — no local
+toolchain needed. Grab the archive for your platform from the
+[Releases page](../../releases/latest), unzip it, and copy `BrownSweep.vst3`
+into your VST3 folder (paths in the table below).
+
+The macOS builds are **not code-signed or notarised**. The first time you load
+one, macOS may refuse to open it; either right-click the plug-in in Finder and
+choose Open, or clear the quarantine flag:
+
+```bash
+xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/BrownSweep.vst3
+```
+
+### Building it yourself
 
 Requirements: CMake ≥ 3.22 and a C++17 compiler. JUCE is downloaded
 automatically unless you point at a local checkout.
@@ -483,7 +635,8 @@ cd build && ctest --output-on-failure
 ./build/Tests/brownsweep_tests Perceptual
 ```
 
-50 tests, ~163,000 assertions. Coverage:
+59 tests, ~275,000 assertions, every one of them run against *both* filter
+topologies where the topology could matter. Coverage:
 
 *Well-formedness* — no NaNs or infinities on silence, impulses, DC, white/pink/
 brown noise and sines from 20 Hz to 18 kHz; stability at every cutoff and slope
@@ -497,10 +650,19 @@ left and right have identical transfer functions; buses from 1 to 8 channels.
 
 *Smoothing* — slamming every control from one extreme to the other mid-signal
 never produces an output step larger than the input itself can produce; the same
-for SLOPE changes and for OVERSAMPLING changes.
+for SLOPE changes, MODE changes, bypass switching and OVERSAMPLING changes.
+
+*Topology* — both modes put their −3 dB point on the CUTOFF control to within
+0.1 dB; the ladder reaches exactly its designed 13 dB resonant peak at every
+slope and is monotonic in between; its peak lands where its poles are; it never
+boosts without resonance; it is bit-exactly linear at ANALOG = 0 (which is what
+keeps the zero-delay solve, and therefore the model, exact); a *driven* ladder
+produces a measurable second harmonic and a linear one produces none at all; and
+it survives 400,000 samples of +12 dBFS noise plus a DC offset at full resonance
+and full drive without leaving the finite numbers.
 
 *Correctness* — the analytic response model matches an FFT of the engine's
-measured impulse response; the fully dry path, and the bypassed path, are the
+measured impulse response, in both modes; the fully dry path, and the bypassed path, are the
 input delayed by exactly the reported latency; the oversampler's round trip is unity and its image rejection
 exceeds 80 dB; the tilt cascade hits its requested slope; the saturator is
 monotonic, bounded, exactly transparent at 0% and exactly zero at zero input.
@@ -527,6 +689,7 @@ against:
 ```bash
 ./build/brownsweep_analysis                     # all sources, human-readable
 ./build/brownsweep_analysis --tilt              # tilt cascade accuracy
+./build/brownsweep_analysis --ladder            # the SH-101-style topology
 ./build/brownsweep_analysis --csv --source lead --character 1.0 --slope 4
 ```
 
@@ -558,6 +721,20 @@ timbres at matched loudness, use OUTPUT.
 end-of-cascade curvature, not inter-section ripple — and it is well below
 audibility for a broadband tilt.
 
+**LADDER's resonance is not on the corner.** It sits where the ladder's poles
+are: 1.2 octaves below the cutoff at 24 dB/octave, 1.8 octaves below at 48. That
+is a consequence of normalising the two modes to agree about where the −3 dB
+point is, which was the more important property to preserve — CUTOFF drives the
+tilt anchor and the loudness contour, so the modes have to mean the same thing
+by it. If you want the resonant note exactly on the corner, use CLEAN.
+
+**LADDER's asymmetric clipping is solved with a one-sample-delayed residual,**
+not exactly. An exact solution needs a Newton iteration per sample; the residual
+form is bounded, unconditionally stable, and exactly zero when the drive is
+zero, but at very high drive and very high frequencies the resonant peak will
+sit a fraction of a percent away from where a perfectly-solved loop would put
+it. Inaudible, and the trade buys a filter that cannot blow up.
+
 **Oversampling is not free.** The whole wet chain runs at the oversampled rate,
 so 4x costs roughly four times the filter work of Off. 2x is the default because
 it is the right trade when ANALOG is in use; if you are running twenty instances
@@ -582,7 +759,8 @@ Source/dsp/                 the complete signal chain, no JUCE dependency
   DesignConstants.h         every tuned number, with its justification
   DspMath.h                 helpers, smoothing, the smooth hinge
   Filters.h                 TPT one-pole and state-variable structures
-  HighPassStage.h           Butterworth cascade, slope morphing, resonance
+  HighPassStage.h           topology selection, slope morphing, mode cross-fade
+  LadderStage.h             SH-101-style ladder: ZDF solve, taps, feedback clipper
   BrownTilt.h               the staggered shelf cascade
   ToneStage.h               bass / mid / treble trims (LFO destinations)
   AnalogStage.h             saturation, asymmetry, HF softening
@@ -599,9 +777,10 @@ Source/                     JUCE plugin wrapper
   PluginEditor.h/.cpp
   gui/                      theme, look and feel, response display
 
-Tests/                      50 tests, no external dependencies
+Tests/                      59 tests, no external dependencies
 Tools/SweepAnalysis.cpp     the measurement rig
 Tools/GuiSnapshot.cpp       headless editor screenshot
+.github/workflows/build.yml CI: tests on three platforms, release binaries
 ```
 
 ## 18. Licence

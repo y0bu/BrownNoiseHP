@@ -44,6 +44,7 @@ struct ResponseState
     float tiltDbPerOctave = 0.0f;
     float resonance01     = 0.0f;
     int   slopeIndex      = 2;
+    int   filterMode      = 0;      // FilterMode
     float bassDb          = 0.0f;
     float midDb           = 0.0f;
     float trebleDb        = 0.0f;
@@ -107,11 +108,25 @@ inline Complex svfBell (float w, float q, float gain) noexcept
 }
 
 //==============================================================================
-/** The conventional high-pass cascade only - i.e. what a "normal" HP filter
-    with the same slope, cutoff and resonance would do.  This is the reference
-    curve drawn behind the BrownSweep curve in the editor. */
+/** Butterworth cascade only - i.e. what a "normal" HP filter with the same
+    slope, cutoff and resonance would do.  This is the reference curve drawn
+    behind the BrownSweep curve in the editor, and it is also the CLEAN mode's
+    filter stage. */
 Complex highPassResponse (float freqHz, float cutoffHz, int slopeIndex,
                           float resonance01, float sampleRate) noexcept;
+
+/** The SH-101-style ladder topology:
+
+        H(s) = s^N (1+s)^(4-N) / ((1+s)^4 + k)
+
+    cascaded twice for slopes steeper than 24 dB/oct, with the poles placed so
+    that the -3 dB point lands on `cutoffHz`. */
+Complex ladderResponse (float freqHz, float cutoffHz, int slopeIndex,
+                        float resonance01, float sampleRate) noexcept;
+
+/** Whichever topology `filterMode` selects. */
+Complex filterResponse (float freqHz, float cutoffHz, int slopeIndex, int filterMode,
+                        float resonance01, float sampleRate) noexcept;
 
 /** The brown-noise-inspired tilt cascade. */
 Complex tiltResponse (float freqHz, float cutoffHz, float tiltDbPerOctave, float sampleRate) noexcept;

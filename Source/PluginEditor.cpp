@@ -38,16 +38,26 @@ BrownSweepAudioProcessorEditor::BrownSweepAudioProcessorEditor (BrownSweepAudioP
     outputAttachment    = std::make_unique<SliderAttachment> (state, bsparams::id::output,    outputKnob.getSlider());
 
     slopeBox.addItemList (bsparams::slopeChoices(), 1);
+    modeBox.addItemList (bsparams::filterModeChoices(), 1);
     oversamplingBox.addItemList (bsparams::oversamplingChoices(), 1);
     addAndMakeVisible (slopeBox);
+    addAndMakeVisible (modeBox);
     addAndMakeVisible (oversamplingBox);
     addAndMakeVisible (autoGainButton);
     addAndMakeVisible (slopeLabel);
+    addAndMakeVisible (modeLabel);
     addAndMakeVisible (oversamplingLabel);
     styleSectionLabel (slopeLabel, "SLOPE");
-    styleSectionLabel (oversamplingLabel, "OVERSAMPLING");
+    styleSectionLabel (modeLabel, "MODE");
+    styleSectionLabel (oversamplingLabel, "OVER");
+
+    modeBox.setTooltip ("CLEAN: Butterworth cascade - neutral, maximally flat, resonance on the corner.\n"
+                        "LADDER: four-pole OTA ladder with one global feedback loop and an asymmetric "
+                        "clipper in it, after the SH-101's IR3109. Wider knee, resonance that blooms "
+                        "below the corner, and even harmonics when you drive it.");
 
     slopeAttachment        = std::make_unique<ComboBoxAttachment> (state, bsparams::id::slope, slopeBox);
+    modeAttachment         = std::make_unique<ComboBoxAttachment> (state, bsparams::id::filterMode, modeBox);
     oversamplingAttachment = std::make_unique<ComboBoxAttachment> (state, bsparams::id::oversampling, oversamplingBox);
     autoGainAttachment     = std::make_unique<ButtonAttachment>   (state, bsparams::id::autoGain, autoGainButton);
 
@@ -195,13 +205,16 @@ void BrownSweepAudioProcessorEditor::resized()
     settingsArea = area.removeFromTop (34);
     {
         auto inner = settingsArea.reduced (10, 6);
-        slopeLabel.setBounds (inner.removeFromLeft (40));
-        slopeBox.setBounds (inner.removeFromLeft (96).reduced (0, 1));
-        inner.removeFromLeft (24);
-        oversamplingLabel.setBounds (inner.removeFromLeft (86));
-        oversamplingBox.setBounds (inner.removeFromLeft (70).reduced (0, 1));
-        inner.removeFromLeft (24);
-        autoGainButton.setBounds (inner.removeFromLeft (120));
+        modeLabel.setBounds (inner.removeFromLeft (36));
+        modeBox.setBounds (inner.removeFromLeft (84).reduced (0, 1));
+        inner.removeFromLeft (18);
+        slopeLabel.setBounds (inner.removeFromLeft (38));
+        slopeBox.setBounds (inner.removeFromLeft (92).reduced (0, 1));
+        inner.removeFromLeft (18);
+        oversamplingLabel.setBounds (inner.removeFromLeft (38));
+        oversamplingBox.setBounds (inner.removeFromLeft (64).reduced (0, 1));
+        inner.removeFromLeft (18);
+        autoGainButton.setBounds (inner.removeFromLeft (110));
     }
 
     area.removeFromTop (10);

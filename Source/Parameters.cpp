@@ -48,6 +48,8 @@ juce::StringArray slopeChoices()
     return choices;
 }
 
+juce::StringArray filterModeChoices() { return { "Clean", "Ladder" }; }
+
 juce::StringArray oversamplingChoices() { return { "Off", "2x", "4x" }; }
 
 juce::StringArray lfoShapeChoices()
@@ -106,6 +108,10 @@ APVTS::ParameterLayout createParameterLayout()
 
     layout.add (std::make_unique<juce::AudioParameterChoice> (
         juce::ParameterID { id::slope, 1 }, "Slope", slopeChoices(), 2));
+
+    layout.add (std::make_unique<juce::AudioParameterChoice> (
+        juce::ParameterID { id::filterMode, 1 }, "Filter Mode", filterModeChoices(),
+        static_cast<int> (bsweep::FilterMode::ladder)));
 
     layout.add (std::make_unique<juce::AudioParameterBool> (
         juce::ParameterID { id::autoGain, 1 }, "Auto Gain", true));
@@ -167,6 +173,7 @@ void ParameterHandles::attach (APVTS& state)
     mix          = state.getRawParameterValue (id::mix);
     output       = state.getRawParameterValue (id::output);
     slope        = state.getRawParameterValue (id::slope);
+    filterMode   = state.getRawParameterValue (id::filterMode);
     autoGain     = state.getRawParameterValue (id::autoGain);
     oversampling = state.getRawParameterValue (id::oversampling);
 
@@ -193,6 +200,7 @@ bsweep::EngineParameters ParameterHandles::read (double bpm) const
     p.mix       = mix->load()       * 0.01f;
     p.outputDb  = output->load();
     p.slopeIndex = static_cast<int> (slope->load());
+    p.filterMode = static_cast<int> (filterMode->load());
     p.autoGain   = autoGain->load() > 0.5f;
     p.bpm        = bpm;
 
