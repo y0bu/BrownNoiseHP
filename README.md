@@ -192,6 +192,23 @@ it that cannot be dialled in on the Butterworth cascade:
   lopsided resonance a symmetric clipper cannot. The test suite checks that a
   linear ladder produces no second harmonic at all and that a driven one does.
 
+Measured on a 220 Hz sine through the whole plug-in (330 Hz cutoff, RESONANCE
+75%, 4x oversampling), harmonic amplitude relative to the fundamental:
+
+| mode | ANALOG | 2nd | 3rd | THD |
+|---|---|---|---|---|
+| CLEAN | 0% | 0.000% | 0.000% | **0.000%** |
+| LADDER | 0% | 0.000% | 0.000% | **0.000%** |
+| CLEAN | 40% | 0.22% | 0.23% | 0.32% |
+| LADDER | 40% | 0.49% | 0.32% | 0.59% |
+| CLEAN | 100% | 1.37% | 0.61% | 1.50% |
+| LADDER | 100% | 2.85% | 1.85% | **3.40%** |
+
+Both modes are *exactly* linear at ANALOG 0 — not "almost". Driven, the ladder
+produces roughly twice the harmonic content of the cascade at the same ANALOG
+setting, with the second harmonic leading, because the loop clipper is being
+driven by the resonance rather than by the output level.
+
 There is one more consequence, specific to using a ladder as a high-pass: **the
 feedback tap carries the low end — the part the filter is throwing away.**
 Sweeping the cutoff upward therefore feeds the disappearing bass into the
