@@ -328,6 +328,24 @@ The resonant peak gains back more than the removed low end cost. There is no
 automation curve you can draw over that which sounds like a fade. BrownSweep on
 the same source and settings falls monotonically to −37.0 dB.
 
+## 10a. CPU
+
+Measured with `Tools/`-style timing on a 4-core cloud VM (a deliberately modest
+machine — a desktop CPU is considerably faster), one stereo instance at 48 kHz
+with both LFOs running, expressed as a percentage of one core:
+
+| oversampling | 12 dB/oct | 24 dB/oct | 48 dB/oct |
+|---|---|---|---|
+| Off | 1.6% | 1.6% | 1.5% |
+| 2x (default) | 3.0% | 2.9% | 2.7% |
+| 4x | 5.9% | 6.2% | 5.5% |
+
+Two things worth noticing. Cost is **flat across slope settings** — all four
+filter sections always run, with the unused ones cross-faded to a bypass, which
+is what makes SLOPE changes click-free and makes CPU predictable when you have
+twenty instances open. And there is no FFT anywhere, so there is no block-size
+sensitivity and no latency beyond the oversampler's.
+
 ## 11. Controls
 
 | control | range | default | notes |
@@ -465,7 +483,7 @@ cd build && ctest --output-on-failure
 ./build/Tests/brownsweep_tests Perceptual
 ```
 
-50 tests, ~165,000 assertions. Coverage:
+50 tests, ~163,000 assertions. Coverage:
 
 *Well-formedness* — no NaNs or infinities on silence, impulses, DC, white/pink/
 brown noise and sines from 20 Hz to 18 kHz; stability at every cutoff and slope
