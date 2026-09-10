@@ -157,6 +157,115 @@ std::vector<std::vector<float>> renderSupersaw (double baseHz, double seconds, f
 }
 
 //==============================================================================
+// A traditional Goa kick and offbeat bass, for putting the filter in context
+//==============================================================================
+
+/** Psy/Goa kick: a fast downward pitch sweep into a short body, plus a click.
+    Short and punchy - it has to get out of the way of the offbeat bass. */
+void addKick (std::vector<std::vector<float>>& out, int at, float level, uint32_t seed)
+{
+    const int numFrames = static_cast<int> (out[0].size());
+    const int length    = static_cast<int> (0.40 * kSampleRate);
+
+    Xorshift32 rng (seed);
+    double phase = 0.0;
+
+    for (int i = 0; i < length; ++i)
+    {
+        const int index = at + i;
+        if (index < 0 || index >= numFrames) continue;
+
+        const double t = static_cast<double> (i) / kSampleRate;
+
+        // 200 Hz down to 48 Hz in about 15 ms: the "thump".
+        const double hz = 48.0 + 152.0 * std::exp (-t / 0.015);
+        phase += hz / kSampleRate;
+
+        const double body  = std::sin (2.0 * kPi * phase) * std::exp (-t / 0.105);
+        const double click = rng.nextBipolar() * std::exp (-t / 0.0035) * 0.30;
+
+        const float s = static_cast<float> (std::tanh ((body + click) * 1.5) / 1.5) * level;
+        out[0][static_cast<size_t> (index)] += s;
+        out[1][static_cast<size_t> (index)] += s;
+    }
+}
+
+/** The offbeat bass note: short, saturated, always on the root.  The saturation
+    is what makes it audible on a small speaker - a pure 55 Hz sine mostly is
+    not. */
+void addBass (std::vector<std::vector<float>>& out, int at, double hz, float level)
+{
+    const int numFrames = static_cast<int> (out[0].size());
+    const int length    = static_cast<int> (0.17 * kSampleRate);
+
+    for (int i = 0; i < length; ++i)
+    {
+        const int index = at + i;
+        if (index < 0 || index >= numFrames) continue;
+
+        const double t = static_cast<double> (i) / kSampleRate;
+        const double attack  = 1.0 - std::exp (-t / 0.0025);
+        const double decay   = std::exp (-t / 0.055);
+        const double release = std::min (1.0, (length - i) / (0.012 * kSampleRate));
+        const double env = attack * decay * release;
+
+        const double tone = std::sin (2.0 * kPi * hz * t) + 0.25 * std::sin (4.0 * kPi * hz * t);
+        const float s = static_cast<float> (std::tanh (tone * env * 2.0) / 2.0) * level;
+
+        out[0][static_cast<size_t> (index)] += s;
+        out[1][static_cast<size_t> (index)] += s;
+    }
+}
+
+/** Sustained minor-chord saw pad: three notes, three detuned voices each. */
+std::vector<std::vector<float>> renderPad (double seconds, float peakLevel)
+{
+    const int numFrames = static_cast<int> (seconds * kSampleRate);
+    const auto table = makeSawTable (4096, 160);
+    const double tableSize = static_cast<double> (table.size());
+
+    const double notes[3] = { 110.00, 130.81, 164.81 };          // A minor
+    const double detune[3] = { -8.0, 0.0, 8.0 };                 // cents
+    const double pan[3]    = { -0.6, 0.0, 0.6 };
+
+    Xorshift32 rng (0xBEEFu);
+    std::vector<std::vector<float>> out (2, std::vector<float> (static_cast<size_t> (numFrames), 0.0f));
+
+    for (int n = 0; n < 3; ++n)
+        for (int v = 0; v < 3; ++v)
+        {
+            const double hz = notes[n] * std::pow (2.0, detune[v] / 1200.0);
+            const double increment = hz / kSampleRate;
+            const float left  = static_cast<float> (std::sqrt (0.5 * (1.0 - pan[v])));
+            const float right = static_cast<float> (std::sqrt (0.5 * (1.0 + pan[v])));
+
+            double phase = rng.nextUnipolar();
+
+            for (int i = 0; i < numFrames; ++i)
+            {
+                const double pos = phase * tableSize;
+                const int i0 = static_cast<int> (pos) % static_cast<int> (table.size());
+                const int i1 = (i0 + 1) % static_cast<int> (table.size());
+                const float frac = static_cast<float> (pos - std::floor (pos));
+                const float s = lerp (table[static_cast<size_t> (i0)], table[static_cast<size_t> (i1)], frac);
+
+                out[0][static_cast<size_t> (i)] += s * left;
+                out[1][static_cast<size_t> (i)] += s * right;
+
+                phase += increment;
+                if (phase >= 1.0) phase -= 1.0;
+            }
+        }
+
+    float peak = 0.0f;
+    for (const auto& ch : out) for (float v : ch) peak = std::max (peak, std::fabs (v));
+    const float gain = peakLevel / std::max (peak, 1.0e-9f);
+    for (auto& ch : out) for (float& v : ch) v *= gain;
+
+    return out;
+}
+
+//==============================================================================
 
 struct Render
 {
@@ -230,6 +339,92 @@ void render (const Render& r, const std::vector<std::vector<float>>& source,
     }
 
     std::printf ("   %s\n", r.description);
+}
+
+/** A traditional Goa arrangement: kick on every beat, bass on every offbeat -
+    K B K B K B K B - with a sustained saw pad running through the plug-in.
+
+    The pad's cutoff never goes below 350 Hz, so the filter is only ever working
+    on the low mids upward and the kick and bass are left completely alone.  The
+    motion is asymmetric because it comes from the plug-in's own saw-up LFO
+    synced to two bars: a slow climb as the pad thins and recedes, then a snap
+    back to full at the top of every second bar. */
+void renderGoaTrack (const std::string& directory)
+{
+    constexpr double bpm = 145.0;
+    constexpr int    bars = 8;
+
+    const double samplesPerBeat = 60.0 / bpm * kSampleRate;
+    const int numFrames = static_cast<int> (bars * 4 * samplesPerBeat + 0.6 * kSampleRate);
+    const double seconds = numFrames / kSampleRate;
+
+    // --- the pad, through the plug-in ------------------------------------
+    auto pad = renderPad (seconds, 0.30f);
+
+    EngineParameters p;
+    p.cutoffHz   = 1107.0f;                 // geometric centre of 350 Hz .. 3.5 kHz
+    p.character  = 0.60f;
+    p.analog     = 0.45f;
+    p.resonance  = 0.30f;
+    p.mix        = 1.0f;
+    p.outputDb   = 0.0f;
+    p.slopeIndex = 2;                       // 24 dB/oct
+    p.filterMode = static_cast<int> (FilterMode::ladder);
+    p.autoGain   = true;
+    p.oversamplingFactor = 2;
+    p.bpm        = bpm;
+
+    // Saw-up, two bars: the asymmetric part.  Depth 0.83 of +/-2 octaves gives
+    // +/-1.66 octaves around 1107 Hz, i.e. exactly 350 Hz to 3.5 kHz.
+    p.lfo[0].destination = static_cast<int> (LfoDestination::cutoff);
+    p.lfo[0].shape       = static_cast<int> (LfoShape::sawUp);
+    p.lfo[0].sync        = true;
+    p.lfo[0].division    = 2;               // 2 bars
+    p.lfo[0].depth       = 0.83f;
+
+    // A slow four-bar breath on the resonance so the climbs are not identical.
+    p.lfo[1].destination = static_cast<int> (LfoDestination::resonance);
+    p.lfo[1].shape       = static_cast<int> (LfoShape::sine);
+    p.lfo[1].sync        = true;
+    p.lfo[1].division    = 1;               // 4 bars
+    p.lfo[1].depth       = 0.45f;
+
+    BrownSweepEngine engine;
+    engine.setParameters (p);
+    engine.prepare (kSampleRate, kBlockSize, 2);
+    engine.setParameters (p);
+
+    std::vector<float*> ptrs (2);
+    for (int pos = 0; pos < numFrames; pos += kBlockSize)
+    {
+        const int n = std::min (kBlockSize, numFrames - pos);
+        for (int ch = 0; ch < 2; ++ch) ptrs[static_cast<size_t> (ch)] = pad[static_cast<size_t> (ch)].data() + pos;
+        engine.process (ptrs.data(), 2, n);
+    }
+
+    writeWav (directory + "/08-goa-pad-only.wav", pad, kSampleRate);
+
+    // --- kick and bass, dry -----------------------------------------------
+    auto mix = pad;
+
+    for (int beat = 0; beat < bars * 4; ++beat)
+    {
+        addKick (mix, static_cast<int> (beat * samplesPerBeat), 0.58f,
+                 static_cast<uint32_t> (beat * 2654435761u + 1u));
+        addBass (mix, static_cast<int> ((beat + 0.5) * samplesPerBeat), 55.0, 0.34f);
+    }
+
+    float peak = 0.0f;
+    for (const auto& ch : mix) for (float v : ch) peak = std::max (peak, std::fabs (v));
+
+    writeWav (directory + "/09-goa-pad-over-kick-bass.wav", mix, kSampleRate);
+
+    std::printf ("\n%.0f BPM, %d bars, kick on every beat and bass on every offbeat.\n"
+                 "Pad cutoff swept 350 Hz - 3.5 kHz by the plug-in's own saw-up LFO synced to two\n"
+                 "bars, so it climbs slowly and snaps back.  Kick and bass are dry.\n"
+                 "  08-goa-pad-only.wav            the filtered pad on its own\n"
+                 "  09-goa-pad-over-kick-bass.wav  the full arrangement (peak %.1f dBFS)\n",
+                 bpm, bars, gainToDb (peak));
 }
 
 EngineParameters baseParams()
@@ -324,6 +519,8 @@ int main (int argc, char** argv)
 
     for (const auto& r : renders)
         render (r, source, seconds, directory);
+
+    renderGoaTrack (directory);
 
     return 0;
 }

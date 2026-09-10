@@ -716,6 +716,14 @@ thing being demonstrated:
 ./build/brownsweep_demo audio/
 ```
 
+It also renders a short arrangement in context — 145 BPM, kick on every beat and
+bass on every offbeat, with the pad's cutoff driven by the plug-in's *own*
+saw-up LFO synced to two bars, so the motion is asymmetric: a slow climb as the
+pad thins and recedes, then a snap back to full at the top of every second bar.
+The cutoff never goes below 350 Hz, so the filter only ever works on the low
+mids upward. Measured on the isolated pad, the 20–120 Hz band sits at −29.8 dB
+relative to full band: the kick and bass region is left completely clear.
+
 It prints the per-second RMS of each render, and the contrast is the whole
 argument in one table. On that saw, energy above 4 kHz per second of the sweep,
 relative to the dry source:
@@ -840,7 +848,7 @@ Source/                     JUCE plugin wrapper
 
 Tests/                      60 tests, no external dependencies
 Tools/SweepAnalysis.cpp     the measurement rig
-Tools/RenderDemo.cpp        renders the audio examples
+Tools/RenderDemo.cpp        renders the audio examples and the Goa arrangement
 Tools/GuiSnapshot.cpp       headless editor screenshot
 .github/workflows/build.yml CI: tests on three platforms, release binaries
 ```
